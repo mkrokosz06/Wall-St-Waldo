@@ -1234,6 +1234,18 @@ class TradeBot:
             )
             return
 
+        # Opening range delay: skip the first N minutes after open (volatile, wide spreads).
+        delay_min = int(self.config.market_open_delay_minutes)
+        if delay_min > 0:
+            open_hh, open_mm = _parse_time_hhmm_to_et(self.config.market_open_time_et)
+            now_et = self._et_now()
+            open_dt = now_et.replace(hour=open_hh, minute=open_mm, second=0, microsecond=0)
+            if now_et < open_dt + timedelta(minutes=delay_min):
+                self._maybe_log_entry_diagnosis(
+                    pre_scan_reason=f"Opening range delay: {delay_min}m after open not elapsed yet.",
+                )
+                return
+
         self._cancel_leftover_sell_orders_when_flat()
 
         held_rows = self._list_universe_positions()
@@ -1320,6 +1332,7 @@ class TradeBot:
         self.state.pending_exit_realized_accumulator = 0.0
 
         self.state.last_entry_attempt_at = self._utc_now()
+        self.state.entry_attempts_today += 1
 
         self.state_store.save(self.state)
 

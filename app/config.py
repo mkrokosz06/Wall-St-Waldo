@@ -87,7 +87,7 @@ class BotConfig:
     paper: bool
 
     # --- Runtime ---
-    loop_interval_sec: int = 30
+    loop_interval_sec: int = 10
 
     # --- Session ---
     symbols_universe: List[str] = None  # type: ignore[assignment]
@@ -126,6 +126,9 @@ class BotConfig:
     # Pattern close must be within this % of SMA5 to qualify.
     candlestick_sma_proximity_pct: float = 0.001
 
+    # Opening range: skip the first N minutes after market open (volatile, noisy).
+    market_open_delay_minutes: int = 15
+
     # Execution (entry)
     entry_limit_offset_pct: float = 0.0001  # 0.01% above best bid (approx)
     entry_timeout_sec: int = 20
@@ -139,7 +142,7 @@ class BotConfig:
     entry_diagnostic_interval_sec: int = 180
 
     # --- Risk & position ---
-    max_open_positions: int = 25
+    max_open_positions: int = 2
     # Cap total long market value (sum of Alpaca position market_value for universe symbols).
     max_portfolio_notional_usd: float = 10_000.0
     stop_loss_pct: float = 0.006  # -0.6%
@@ -169,7 +172,7 @@ class BotConfig:
     # Take-profit (sell for gain) rule:
     # If price rises by this percent above entry during the holding window, the bot will sell early.
     enable_take_profit: bool = True
-    take_profit_pct: float = 0.004  # +0.4%
+    take_profit_pct: float = 0.009  # +0.9% — 1.5:1 reward-to-risk vs 0.6% stop
 
     # Risk: your requested rules
     max_daily_realized_loss: float = -20.0  # realized P&L after exits only
@@ -270,7 +273,7 @@ def load_config() -> BotConfig:
         symbols_universe=universe,
         state_path=state_path,
         log_level=log_level,
-        loop_interval_sec=_env_int("LOOP_INTERVAL_SEC", 30),
+        loop_interval_sec=_env_int("LOOP_INTERVAL_SEC", 10),
         max_daily_realized_loss=_env_float("MAX_DAILY_REALIZED_LOSS", -20.0),
         enable_time_stop=_env_bool("ENABLE_TIME_STOP", False),
         time_stop_minutes=_env_int("TIME_STOP_MINUTES", 240),
@@ -297,7 +300,8 @@ def load_config() -> BotConfig:
         post_loss_extra_cooldown_sec=_env_int("POST_LOSS_EXTRA_COOLDOWN_SEC", 150),
         min_seconds_between_entry_orders=_env_int("MIN_SECONDS_BETWEEN_ENTRY_ORDERS", 2),
         entry_diagnostic_interval_sec=_env_int("ENTRY_DIAGNOSTIC_INTERVAL_SEC", 180),
-        max_open_positions=_env_int("MAX_OPEN_POSITIONS", 25),
+        max_open_positions=_env_int("MAX_OPEN_POSITIONS", 2),
+        market_open_delay_minutes=_env_int("MARKET_OPEN_DELAY_MINUTES", 15),
         max_portfolio_notional_usd=_env_float("MAX_PORTFOLIO_NOTIONAL_USD", 10_000.0),
         enable_offline_training=_env_bool("ENABLE_OFFLINE_TRAINING", True),
         offline_training_lookback_trades=_env_int("OFFLINE_TRAINING_LOOKBACK_TRADES", 15),

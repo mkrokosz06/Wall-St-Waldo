@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 def dual_ma_uptrend(bars_df: pd.DataFrame, sym: str, config: "BotConfig") -> bool:
-    """Long-only: price not meaningfully below fast MA (with small tolerance)."""
+    """Long-only: fast MA >= slow MA (bullish structure) AND price not meaningfully below fast MA."""
     if not config.enable_trend_filter:
         return True
     try:
@@ -29,8 +29,12 @@ def dual_ma_uptrend(bars_df: pd.DataFrame, sym: str, config: "BotConfig") -> boo
         return False
     c = df_sym["close"].astype(float)
     sma_fast = float(c.rolling(fast).mean().iloc[-1])
+    sma_slow = float(c.rolling(slow).mean().iloc[-1])
     last = float(c.iloc[-1])
     tol = float(config.trend_ma_tolerance_pct)
+    # Require bullish MA structure (fast above slow) AND price near/above fast MA.
+    if sma_fast < sma_slow * (1.0 - tol):
+        return False
     return last >= sma_fast * (1.0 - tol)
 
 
