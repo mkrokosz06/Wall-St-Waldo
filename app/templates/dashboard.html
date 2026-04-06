@@ -543,12 +543,12 @@
 
     <!-- Positions + Bot state -->
     <div class="two-col">
-      <section class="panel">
+      <section class="panel" id="pos-panel">
         <div class="panel-header">
-          <h2>Open Positions</h2>
+          <h2 id="pos-panel-title">Open Positions</h2>
           <span class="tag" id="pos-count-tag">0 open</span>
         </div>
-        <div class="scroll-x">
+        <div class="scroll-x" id="pos-table-wrap">
           <table class="ttable" id="pos-table">
             <thead>
               <tr>
@@ -564,6 +564,11 @@
             </thead>
             <tbody id="pos-body"></tbody>
           </table>
+        </div>
+        <div class="panel-body" id="no-trade-wrap" style="display:none;">
+          <div id="no-trade-list" style="font-size:0.82rem; color:var(--text); padding:0.3rem 0; line-height:1.7;">
+            Loading...
+          </div>
         </div>
       </section>
 
@@ -810,12 +815,7 @@
       const tbody = $("pos-body");
       tbody.innerHTML = "";
       const positions = s.positions || [];
-      $("pos-count-tag").textContent = positions.length + " open";
-      if (!positions.length) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = '<td colspan="8" class="empty-hint">No open positions.</td>';
-        tbody.appendChild(tr);
-      } else {
+      if (positions.length) {
         positions.forEach(p => {
           const pnlCls = pnlClass(p.unrealized_pl);
           const dayCls = pnlClass(p.change_today);
@@ -832,6 +832,9 @@
           tbody.appendChild(tr);
         });
       }
+
+      // Swap between positions table and no-trade summary
+      updateNoTradePanel(positions.length);
 
       // Bot state panel
       $("bs-state").innerHTML = stateChipHtml(s.bot_state);
@@ -932,6 +935,154 @@
       }
     }
 
+    // ---------- no-trade summary ----------
+    let lastNoTradeLoad = 0;
+    const NO_TRADE_INTERVAL_MS = 180_000; // 3 minutes
+
+    // Translate raw diagnostic codes into plain English
+    function translateSymbolReason(sym, code) {
+      // code examples: "mom=-0.001230<0.000500", "dual_ma_not_uptrend", "spread=0.00150>0.00100",
+      // "score=0.001234<0.002000(raw=0.001000)", "held", "cooldown_until=...",
+      // "no_quote", "no_past_slice", "candlestick_gate_fail", "blocked_by_SPY_market_filter",
+      // "passed_filters(unexpected)"
+      if (code === "held") return "Already holding a position";
+      if (code === "no_quote") return "No market quote available";
+      if (code === "no_past_slice") return "Not enough price history yet";
+      if (code === "dual_ma_not_uptrend") return "Moving averages show a downtrend";
+      if (code === "candlestick_gate_fail") return "No bullish candlestick pattern detected";
+      if (code.startsWith("blocked_by_SPY_market_filter")) return "Blocked \u2014 SPY is in a downtrend";
+      if (code.startsWith("cooldown_until=")) {
+        const until = code.replace("cooldown_until=", "");
+        return `Entry cooldown active (until ${until})`;
+      }
+      const momMatch = code.match(/^mom=([-\d.]+)<([-\d.]+)$/);
+      if (momMatch) {
+        const actual = (parseFloat(momMatch[1]) * 100).toFixed(3);
+        const needed = (parseFloat(momMatch[2]) * 100).toFixed(3);
+        return `Momentum too weak (${actual}%, needs at least ${needed}%)`;
+      }
+      const spreadMatch = code.match(/^spread=([-\d.]+)>([-\d.]+)$/);
+      if (spreadMatch) {
+        const actual = (parseFloat(spreadMatch[1]) * 100).toFixed(3);
+        const limit = (parseFloat(spreadMatch[2]) * 100).toFixed(3);
+        return `Bid-ask spread too wide (${actual}%, max ${limit}%)`;
+      }
+      const scoreMatch = code.match(/^score=([-\d.]+)<([-\d.]+)/);
+      if (scoreMatch) {
+        const actual = parseFloat(scoreMatch[1]).toFixed(4);
+        const needed = parseFloat(scoreMatch[2]).toFixed(4);
+        return `Entry score too low (${actual}, needs ${needed})`;
+      }
+      if (code === "passed_filters(unexpected)") return "Passed all filters (unexpected \u2014 may have entered)";
+      return code; // fallback: show raw
+    }
+
+    function translateBlocker(blockerText) {
+      const b = blockerText.replace("Blocker: ", "").trim();
+      if (b.includes("halt_new_entries=True")) return "New entries are paused (halted from dashboard or risk limit).";
+      if (b.includes("ENTRY_PENDING")) return "Waiting for a limit buy order to fill or time out.";
+      if (b.includes("EXIT_PENDING")) return "Waiting for a sell order to complete.";
+      if (b.includes("Opening range delay")) {
+        const m = b.match(/(\d+)m/);
+        return `Waiting for the opening range delay (${m ? m[1] + " minutes" : "a few minutes"} after market open).`;
+      }
+      if (b.includes("min_seconds_between_entry_orders")) return "Cooling down between entry attempts.";
+      if (b.includes("max_open_positions reached")) return "Already at the maximum number of open positions.";
+      if (b.includes("qty=0")) return "A candidate passed all filters, but position size came out to zero (daily loss limit, insufficient cash, or portfolio cap reached).";
+      if (b.includes("No quote")) return "Found a candidate, but couldn't get a market quote for it.";
+      if (b.includes("Invalid limit_price")) return "Found a candidate, but the bid price was invalid.";
+      return b;
+    }
+
+    function renderDiagnosticEnglish(msg) {
+      const sections = msg.split(" | ");
+      let html = "";
+      let hasBlocker = false;
+
+      for (const sec of sections) {
+        if (sec.startsWith("Entry diagnostic:")) {
+          // skip the raw header — we'll show the translated detail instead
+          continue;
+        }
+        if (sec.startsWith("Blocker:")) {
+          hasBlocker = true;
+          html += `<div style="color:var(--amber); margin:0.35rem 0; font-weight:600;">${translateBlocker(sec)}</div>`;
+        }
+        if (sec.startsWith("Detail:")) {
+          const detail = sec.replace("Detail: ", "").trim();
+          const tokens = detail.split(/\s+/);
+          // check for SPY global blocker
+          const spyBlock = tokens.find(t => t === "SPY_market_filter_not_uptrend(blocks_all)");
+          if (spyBlock) {
+            html += `<div style="color:var(--amber); margin:0.35rem 0 0.2rem; font-weight:600;">The broad market (SPY) is trending down \u2014 all new entries are blocked.</div>`;
+          }
+          // per-symbol reasons
+          const symReasons = tokens.filter(t => t.includes(":") && !t.startsWith("SPY_market"));
+          if (symReasons.length) {
+            html += '<div style="margin-top:0.3rem;">';
+            for (const tok of symReasons) {
+              const colonIdx = tok.indexOf(":");
+              const sym = tok.substring(0, colonIdx);
+              const code = tok.substring(colonIdx + 1);
+              const reason = translateSymbolReason(sym, code);
+              html += `<div style="padding:0.2rem 0; display:flex; align-items:baseline; gap:0.5rem;">` +
+                `<span style="color:var(--accent); font-weight:600; font-family:var(--font-mono); min-width:3rem;">${sym}</span>` +
+                `<span>${reason}</span></div>`;
+            }
+            html += '</div>';
+          }
+        }
+      }
+
+      // If only the header was present (no Blocker, no Detail)
+      if (!html) {
+        html = '<span style="color:var(--muted);">No candidates met entry criteria.</span>';
+      }
+      return html;
+    }
+
+    async function loadNoTradeReasons(force) {
+      const now = Date.now();
+      if (!force && (now - lastNoTradeLoad) < NO_TRADE_INTERVAL_MS) return;
+      lastNoTradeLoad = now;
+      try {
+        const j = await fetchJson("/api/no-trade-reasons");
+        const list = $("no-trade-list");
+        const reasons = j.reasons || [];
+        if (!reasons.length) {
+          list.innerHTML = '<span style="color:var(--muted);">No diagnostic entries in log yet.</span>';
+          return;
+        }
+        // Show only the most recent diagnostic
+        const latest = reasons[0];
+        let html = `<div style="color:var(--muted); font-size:0.68rem; margin-bottom:0.4rem;">Last checked: ${latest.ts}</div>`;
+        html += renderDiagnosticEnglish(latest.message);
+        list.innerHTML = html;
+      } catch (e) {
+        $("no-trade-list").innerHTML = `<span style="color:var(--red);">Error: ${e.message || e}</span>`;
+      }
+    }
+
+    // Swap positions panel between table and no-trade summary
+    function updateNoTradePanel(posCount) {
+      const tableWrap = $("pos-table-wrap");
+      const noTradeWrap = $("no-trade-wrap");
+      const title = $("pos-panel-title");
+      const tag = $("pos-count-tag");
+      if (posCount === 0) {
+        tableWrap.style.display = "none";
+        noTradeWrap.style.display = "";
+        title.textContent = "No-Trade Summary";
+        tag.textContent = "no positions";
+        loadNoTradeReasons(false);
+      } else {
+        tableWrap.style.display = "";
+        noTradeWrap.style.display = "none";
+        title.textContent = "Open Positions";
+        tag.textContent = posCount + " open";
+      }
+    }
+
     // ---------- orchestration ----------
     function setMsg(text, cls) {
       const el = $("action-msg");
@@ -947,7 +1098,7 @@
       }
     }
 
-    $("btn-refresh").onclick = () => { setMsg("Refreshing…"); refreshAll().then(() => setMsg("")); };
+    $("btn-refresh").onclick = () => { setMsg("Refreshing…"); lastNoTradeLoad = 0; refreshAll().then(() => setMsg("")); };
 
     $("btn-resume").onclick = async () => {
       $("btn-resume").disabled = true;

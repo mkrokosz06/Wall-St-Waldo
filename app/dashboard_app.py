@@ -11,6 +11,7 @@ Binds to localhost only by default (not exposed on LAN).
 
 from __future__ import annotations
 
+import collections
 import os
 import subprocess
 import sys
@@ -74,6 +75,35 @@ def api_trades():
                 "log_path": LOG_PATH,
             }
         )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/no-trade-reasons")
+def api_no_trade_reasons():
+    """Return the most recent Entry diagnostic lines from the bot log."""
+    try:
+        if not os.path.isfile(LOG_PATH):
+            return jsonify({"ok": True, "reasons": []})
+        # Read last 500 lines to find recent diagnostics
+        buf: collections.deque[str] = collections.deque(maxlen=500)
+        with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                buf.append(line)
+        results = []
+        for line in reversed(buf):
+            if "Entry diagnostic:" not in line:
+                continue
+            stripped = line.strip()
+            # Format: "2025-01-15 09:32:45.123 INFO Entry diagnostic: ..."
+            # Extract timestamp (first 23 chars) and message after "Entry diagnostic: "
+            ts = stripped[:23] if len(stripped) >= 23 else ""
+            idx = stripped.find("Entry diagnostic:")
+            msg = stripped[idx:] if idx >= 0 else stripped
+            results.append({"ts": ts, "message": msg})
+            if len(results) >= 5:
+                break
+        return jsonify({"ok": True, "reasons": results})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

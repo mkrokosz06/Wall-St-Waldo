@@ -16,8 +16,8 @@ _TS_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)")
 _ENTRY = re.compile(
     r"ENTRY filled:\s*symbol=(?P<sym>[A-Z]+)\s+qty=(?P<qty>\d+(?:\.\d+)?)\s+avg_price=(?P<avg>\d+(?:\.\d+)?)"
 )
-_EXIT = re.compile(r"EXIT filled\.\s*exit_pnl=(?P<pnl>[-\d.]+)")
-_STOP = re.compile(r"STOP filled\.\s*exit_pnl=(?P<pnl>[-\d.]+)")
+_EXIT = re.compile(r"EXIT filled.*?exit_pnl=(?P<pnl>[-\d.]+)")
+_STOP = re.compile(r"STOP filled.*?exit_pnl=(?P<pnl>[-\d.]+)")
 
 
 @dataclass

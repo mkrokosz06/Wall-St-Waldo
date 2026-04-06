@@ -1532,6 +1532,8 @@ class TradeBot:
         self._online_nudge_from_trade(trade_total)
         self._record_exit_for_cooldown(sym, trade_total)
         self.state.position_legs.pop(sym.upper(), None)
+        if self.state.state == "EXIT_PENDING" and not self.state.exit_pending_symbol:
+            self.state.state = "FLAT"
         self._normalize_aggregate_state()
         self._scrub_top_level_if_flat()
 
@@ -1747,6 +1749,7 @@ class TradeBot:
         if not self.state.exit_order_id or not self.state.exit_pending_symbol:
             self.state.exit_pending_symbol = None
             self.state.exit_order_id = None
+            self.state.state = "FLAT"
             self._normalize_aggregate_state()
             self.state_store.save(self.state)
             self._drain_pending_market_exit()
