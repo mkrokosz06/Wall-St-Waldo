@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# State
+state.json
+
+# Claude
+.claude/

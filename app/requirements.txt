@@ -1,0 +1,7 @@
+alpaca-py
+requests
+pandas
+numpy
+python-dotenv
+pytz
+flask>=3.0.0
