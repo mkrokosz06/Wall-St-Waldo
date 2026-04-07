@@ -1,12 +1,13 @@
 import json
 import os
 import time
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
 from alpaca_client import AlpacaTradingREST
-from config import load_config
+from config import load_config, resolve_bot_log_path
 
 
 def _pick_env_path() -> str:
@@ -82,55 +83,87 @@ def main() -> None:
 
     time.sleep(1)
 
+    log_path = resolve_bot_log_path()
+
+    # Build per-symbol entry data from multi-leg state (position_legs), fall back to top-level.
+    legs: Dict[str, Any] = {}
+    raw_legs = state.get("position_legs")
+    if isinstance(raw_legs, dict):
+        for s, leg in raw_legs.items():
+            if isinstance(leg, dict):
+                legs[str(s).upper()] = leg
+    # Legacy fallback: single top-level position
+    if not legs:
+        ts = state.get("entry_symbol")
+        ea = state.get("entry_avg_price")
+        eq = state.get("entry_filled_qty")
+        if ts and ea:
+            legs[str(ts).upper()] = {"entry_avg_price": ea, "entry_filled_qty": float(eq or 0)}
+
     # Market sell any remaining position.
     positions = trading.get_positions()
     for p in positions:
         sym = p.get("symbol")
         qty = float(p.get("qty", 0) or 0)
-        if sym and qty > 0:
-            resp = trading.submit_order(
-                {
-                    "symbol": str(sym),
-                    "qty": str(qty),
-                    "side": "sell",
-                    "type": "market",
-                    "time_in_force": "day",
-                }
-            )
-            # Best-effort: if this matches the bot's tracked position, wait for fill and update daily P&L.
-            try:
-                tracked_sym = state.get("entry_symbol")
-                entry_avg = state.get("entry_avg_price")
-                tracked_qty = float(state.get("entry_filled_qty") or 0.0)
-            except Exception:
-                tracked_sym = None
-                entry_avg = None
-                tracked_qty = 0.0
+        if not sym or qty <= 0:
+            continue
+        resp = trading.submit_order(
+            {
+                "symbol": str(sym),
+                "qty": str(qty),
+                "side": "sell",
+                "type": "market",
+                "time_in_force": "day",
+            }
+        )
+        sym_u = str(sym).upper()
+        leg = legs.get(sym_u, {})
+        entry_avg = leg.get("entry_avg_price") or state.get("entry_avg_price")
 
-            order_id = resp.get("id")
-            if order_id and tracked_sym and str(sym).upper() == str(tracked_sym).upper() and entry_avg:
-                filled = _poll_until_filled(trading, str(order_id), timeout_sec=90)
-                if filled:
-                    fq, sell_avg = _order_filled_qty_avg(filled)
-                    if fq > 0 and sell_avg is not None:
-                        realized = (float(sell_avg) - float(entry_avg)) * float(fq)
-                        try:
-                            state["daily_realized_pnl"] = float(state.get("daily_realized_pnl") or 0.0) + float(realized)
-                        except Exception:
-                            state["daily_realized_pnl"] = float(realized)
-                        # Reset tracked position bits to FLAT.
-                        state["state"] = "FLAT"
-                        state["entry_order_id"] = None
-                        state["entry_symbol"] = None
-                        state["entry_submitted_at"] = None
-                        state["entry_filled_qty"] = 0.0
-                        state["entry_avg_price"] = None
-                        state["entry_filled_at"] = None
-                        state["stop_order_id"] = None
-                        state["stop_submitted_at"] = None
-                        state["exit_order_id"] = None
-                        state["exit_submitted_at"] = None
-                        _write_state(cfg.state_path, state)
+        order_id = resp.get("id")
+        if order_id and entry_avg:
+            filled = _poll_until_filled(trading, str(order_id), timeout_sec=90)
+            if filled:
+                fq, sell_avg = _order_filled_qty_avg(filled)
+                if fq > 0 and sell_avg is not None:
+                    realized = (float(sell_avg) - float(entry_avg)) * float(fq)
+                    try:
+                        state["daily_realized_pnl"] = float(state.get("daily_realized_pnl") or 0.0) + realized
+                    except Exception:
+                        state["daily_realized_pnl"] = realized
+                    # Write a log line so the trade parser records this flatten.
+                    try:
+                        ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.000")
+                        daily_pnl = state.get("daily_realized_pnl", realized)
+                        log_line = (
+                            f"{ts_str} INFO EXIT filled {sym_u}. "
+                            f"exit_pnl={realized:.2f} daily_realized_pnl={daily_pnl:.2f} "
+                            f"halt_new_entries=False\n"
+                        )
+                        with open(log_path, "a", encoding="utf-8") as lf:
+                            lf.write(log_line)
+                    except Exception:
+                        pass
+                    # Remove leg from position_legs.
+                    if isinstance(state.get("position_legs"), dict):
+                        state["position_legs"].pop(sym_u, None)
+        # Reset top-level fields if this was the legacy tracked symbol.
+        if sym_u == str(state.get("entry_symbol", "")).upper():
+            state["state"] = "FLAT"
+            state["entry_order_id"] = None
+            state["entry_symbol"] = None
+            state["entry_submitted_at"] = None
+            state["entry_filled_qty"] = 0.0
+            state["entry_avg_price"] = None
+            state["entry_filled_at"] = None
+            state["stop_order_id"] = None
+            state["stop_submitted_at"] = None
+            state["exit_order_id"] = None
+            state["exit_submitted_at"] = None
+    # If all legs cleared, mark FLAT.
+    if isinstance(state.get("position_legs"), dict) and not state["position_legs"]:
+        state["state"] = "FLAT"
+    _write_state(cfg.state_path, state)
 
     # Stop the running bot process if bot.lock exists.
     lock_path = os.getenv("BOT_LOCK_PATH", "bot.lock")

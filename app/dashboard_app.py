@@ -162,16 +162,6 @@ def api_resume_entries():
         cfg = load_config()
         store = StateStore(cfg.state_path)
         st = store.load()
-        if st.state != "FLAT":
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "Bot state is not FLAT; resolve position or run stop_bot first.",
-                    }
-                ),
-                400,
-            )
         if st.daily_realized_pnl <= cfg.max_daily_realized_loss:
             return (
                 jsonify(

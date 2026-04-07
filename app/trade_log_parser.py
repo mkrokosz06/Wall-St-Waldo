@@ -16,8 +16,8 @@ _TS_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)")
 _ENTRY = re.compile(
     r"ENTRY filled:\s*symbol=(?P<sym>[A-Z]+)\s+qty=(?P<qty>\d+(?:\.\d+)?)\s+avg_price=(?P<avg>\d+(?:\.\d+)?)"
 )
-_EXIT = re.compile(r"EXIT filled.*?exit_pnl=(?P<pnl>[-\d.]+)")
-_STOP = re.compile(r"STOP filled.*?exit_pnl=(?P<pnl>[-\d.]+)")
+_EXIT = re.compile(r"EXIT filled\s+(?P<sym>[A-Z]+)[.\s].*?exit_pnl=(?P<pnl>[-\d.]+)")
+_STOP = re.compile(r"STOP filled\s+(?P<sym>[A-Z]+)[.\s].*?exit_pnl=(?P<pnl>[-\d.]+)")
 
 
 @dataclass
@@ -66,10 +66,11 @@ def _tail_lines(path: str, n: int = 200_000) -> list:
 def parse_trades_from_log(log_path: str, max_lines: int = 200_000) -> List[ParsedTrade]:
     """
     Walk the log in order. ENTRY filled opens a position; EXIT/STOP filled closes it.
+    Supports multiple simultaneous positions keyed by symbol.
     If a close appears without a matching open, we still record it with symbol unknown.
     """
     trades: List[ParsedTrade] = []
-    pending: Optional[Dict[str, Any]] = None
+    pending: Dict[str, Any] = {}  # sym -> {ts, symbol, qty, avg}
 
     lines = _tail_lines(log_path, n=max_lines)
 
@@ -84,43 +85,43 @@ def parse_trades_from_log(log_path: str, max_lines: int = 200_000) -> List[Parse
                 qty = float(em.group("qty"))
                 avg = float(em.group("avg"))
             except ValueError:
-                # Skip malformed numeric fragments in noisy logs.
                 continue
-            pending = {
-                "ts": ts,
-                "symbol": em.group("sym"),
-                "qty": qty,
-                "avg": avg,
-            }
+            sym = em.group("sym")
+            pending[sym] = {"ts": ts, "symbol": sym, "qty": qty, "avg": avg}
             continue
 
         xm = _EXIT.search(line)
         sm = _STOP.search(line)
         if xm or sm:
-            pnl_s = (xm or sm).group("pnl")
+            m = xm or sm
+            pnl_s = m.group("pnl")
             try:
                 pnl = float(pnl_s)
             except ValueError:
                 continue
             kind = "market_exit" if xm else "stop_loss"
-            if pending:
+            sym = m.group("sym")
+            entry = pending.pop(sym, None)
+            if entry is None and pending:
+                # Fallback: consume oldest pending entry if sym not matched
+                entry = pending.pop(next(iter(pending)))
+            if entry:
                 trades.append(
                     ParsedTrade(
-                        entry_ts=pending["ts"],
-                        symbol=pending["symbol"],
-                        qty=pending["qty"],
-                        entry_avg=pending["avg"],
+                        entry_ts=entry["ts"],
+                        symbol=entry["symbol"],
+                        qty=entry["qty"],
+                        entry_avg=entry["avg"],
                         exit_ts=ts,
                         exit_pnl=pnl,
                         exit_kind=kind,
                     )
                 )
-                pending = None
             else:
                 trades.append(
                     ParsedTrade(
                         entry_ts=ts,
-                        symbol="?",
+                        symbol=sym,
                         qty=0.0,
                         entry_avg=0.0,
                         exit_ts=ts,
