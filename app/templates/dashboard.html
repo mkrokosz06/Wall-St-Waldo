@@ -937,14 +937,10 @@
 
     // ---------- no-trade summary ----------
     let lastNoTradeLoad = 0;
-    const NO_TRADE_INTERVAL_MS = 180_000; // 3 minutes
+    const NO_TRADE_INTERVAL_MS = 30_000; // 30 seconds
 
     // Translate raw diagnostic codes into plain English
     function translateSymbolReason(sym, code) {
-      // code examples: "mom=-0.001230<0.000500", "dual_ma_not_uptrend", "spread=0.00150>0.00100",
-      // "score=0.001234<0.002000(raw=0.001000)", "held", "cooldown_until=...",
-      // "no_quote", "no_past_slice", "candlestick_gate_fail", "blocked_by_SPY_market_filter",
-      // "passed_filters(unexpected)"
       if (code === "held") return "Already holding a position";
       if (code === "no_quote") return "No market quote available";
       if (code === "no_past_slice") return "Not enough price history yet";
@@ -982,6 +978,7 @@
       if (b.includes("halt_new_entries=True")) return "New entries are paused (halted from dashboard or risk limit).";
       if (b.includes("ENTRY_PENDING")) return "Waiting for a limit buy order to fill or time out.";
       if (b.includes("EXIT_PENDING")) return "Waiting for a sell order to complete.";
+      if (b.includes("Market data stale")) return "Market data is stale \u2014 the latest bar is too old. The bot is waiting for fresh data before evaluating signals. This is normal outside market hours.";
       if (b.includes("Opening range delay")) {
         const m = b.match(/(\d+)m/);
         return `Waiting for the opening range delay (${m ? m[1] + " minutes" : "a few minutes"} after market open).`;
@@ -994,14 +991,58 @@
       return b;
     }
 
+    function translateNoSymbolsScored(detail) {
+      // e.g. "no_symbols_scored thin_bars<15=1 avg_vol<2000.0=4 bad_past_or_vol=0 no_bars_frame=0"
+      let html = '<div style="color:var(--amber); margin:0.35rem 0; font-weight:600;">No symbols passed initial scoring filters.</div>';
+      const parts = [];
+      const thinMatch = detail.match(/thin_bars<(\d+)=(\d+)/);
+      if (thinMatch && parseInt(thinMatch[2]) > 0) {
+        parts.push(`${thinMatch[2]} symbol(s) have too few bars (need ${thinMatch[1]}+ minute bars of history)`);
+      }
+      const volMatch = detail.match(/avg_vol<([\d.]+)=(\d+)/);
+      if (volMatch && parseInt(volMatch[2]) > 0) {
+        parts.push(`${volMatch[2]} symbol(s) have average volume below ${parseFloat(volMatch[1]).toLocaleString()}`);
+      }
+      const badMatch = detail.match(/bad_past_or_vol=(\d+)/);
+      if (badMatch && parseInt(badMatch[1]) > 0) {
+        parts.push(`${badMatch[1]} symbol(s) have bad price history or zero volume`);
+      }
+      const noFrameMatch = detail.match(/no_bars_frame=(\d+)/);
+      if (noFrameMatch && parseInt(noFrameMatch[1]) > 0) {
+        parts.push(`${noFrameMatch[1]} symbol(s) have no bar data at all`);
+      }
+      if (parts.length) {
+        html += '<div style="margin-top:0.25rem;">';
+        for (const p of parts) {
+          html += `<div style="padding:0.15rem 0;">\u2022 ${p}</div>`;
+        }
+        html += '</div>';
+      }
+      return html;
+    }
+
     function renderDiagnosticEnglish(msg) {
       const sections = msg.split(" | ");
       let html = "";
       let hasBlocker = false;
+      let headerInfo = null;
 
       for (const sec of sections) {
         if (sec.startsWith("Entry diagnostic:")) {
-          // skip the raw header — we'll show the translated detail instead
+          // Extract key metrics from header for display
+          const haltMatch = sec.match(/halt_new_entries=(\w+)/);
+          const heldMatch = sec.match(/held=\[([^\]]*)\]/);
+          const portfolioMatch = sec.match(/portfolio.?\$(\d+)\/\$(\d+)/);
+          const roomMatch = sec.match(/room.?\$([\d.]+)/);
+          const cashMatch = sec.match(/cash.?\$([\d.]+)/);
+          headerInfo = {
+            halt: haltMatch ? haltMatch[1] : null,
+            held: heldMatch ? heldMatch[1] : "",
+            invested: portfolioMatch ? portfolioMatch[1] : null,
+            cap: portfolioMatch ? portfolioMatch[2] : null,
+            room: roomMatch ? roomMatch[1] : null,
+            cash: cashMatch ? cashMatch[1] : null,
+          };
           continue;
         }
         if (sec.startsWith("Blocker:")) {
@@ -1010,6 +1051,19 @@
         }
         if (sec.startsWith("Detail:")) {
           const detail = sec.replace("Detail: ", "").trim();
+
+          // Handle no_symbols_scored with sub-reasons
+          if (detail.startsWith("no_symbols_scored")) {
+            html += translateNoSymbolsScored(detail);
+            continue;
+          }
+
+          // Handle scoring_bars_unavailable
+          if (detail.includes("scoring_bars_unavailable")) {
+            html += `<div style="color:var(--amber); margin:0.35rem 0; font-weight:600;">Could not fetch market data for scoring \u2014 check API connection or market data subscription.</div>`;
+            continue;
+          }
+
           const tokens = detail.split(/\s+/);
           // check for SPY global blocker
           const spyBlock = tokens.find(t => t === "SPY_market_filter_not_uptrend(blocks_all)");
@@ -1034,10 +1088,43 @@
         }
       }
 
+      // Show header summary
+      if (headerInfo) {
+        let summary = '<div style="margin-top:0.4rem; padding:0.4rem 0.5rem; background:var(--surface); border-radius:4px; font-size:0.75rem; color:var(--muted);">';
+        const items = [];
+        if (headerInfo.held) items.push(`Holding: ${headerInfo.held}`);
+        else items.push("Holding: none");
+        if (headerInfo.invested && headerInfo.cap) items.push(`Invested: $${parseInt(headerInfo.invested).toLocaleString()} / $${parseInt(headerInfo.cap).toLocaleString()}`);
+        if (headerInfo.room) items.push(`Room: $${parseInt(headerInfo.room).toLocaleString()}`);
+        if (headerInfo.cash) items.push(`Cash: $${parseFloat(headerInfo.cash).toLocaleString()}`);
+        summary += items.join(' &middot; ');
+        summary += '</div>';
+        html += summary;
+      }
+
       // If only the header was present (no Blocker, no Detail)
       if (!html) {
         html = '<span style="color:var(--muted);">No candidates met entry criteria.</span>';
       }
+      return html;
+    }
+
+    function renderWarnings(warnings) {
+      if (!warnings || !warnings.length) return "";
+      let html = '<div style="margin-top:0.5rem; border-top:1px solid var(--border); padding-top:0.4rem;">';
+      html += '<div style="font-size:0.7rem; color:var(--muted); margin-bottom:0.25rem; font-weight:600;">Recent Warnings</div>';
+      for (const w of warnings) {
+        let msg = w.message;
+        if (msg.includes("Market data stale")) {
+          const ageMatch = msg.match(/(\d+)s old/);
+          const age = ageMatch ? ageMatch[1] : "?";
+          msg = `Market data is stale (${age}s old). This typically means the market is closed or the data feed is down.`;
+        } else if (msg.includes("Loop quotes fetch failed")) {
+          msg = "Failed to fetch latest quotes from broker API.";
+        }
+        html += `<div style="padding:0.15rem 0; font-size:0.75rem;"><span style="color:var(--muted); font-size:0.65rem;">${w.ts}</span> <span style="color:var(--amber);">${msg}</span></div>`;
+      }
+      html += '</div>';
       return html;
     }
 
@@ -1049,14 +1136,33 @@
         const j = await fetchJson("/api/no-trade-reasons");
         const list = $("no-trade-list");
         const reasons = j.reasons || [];
-        if (!reasons.length) {
+        const warnings = j.warnings || [];
+        if (!reasons.length && !warnings.length) {
           list.innerHTML = '<span style="color:var(--muted);">No diagnostic entries in log yet.</span>';
           return;
         }
-        // Show only the most recent diagnostic
-        const latest = reasons[0];
-        let html = `<div style="color:var(--muted); font-size:0.68rem; margin-bottom:0.4rem;">Last checked: ${latest.ts}</div>`;
-        html += renderDiagnosticEnglish(latest.message);
+        let html = "";
+        if (reasons.length) {
+          // Show most recent diagnostic with full detail
+          const latest = reasons[0];
+          html += `<div style="color:var(--muted); font-size:0.68rem; margin-bottom:0.4rem;">Last checked: ${latest.ts}</div>`;
+          html += renderDiagnosticEnglish(latest.message);
+
+          // Show older diagnostics (collapsed) if reasons changed
+          if (reasons.length > 1) {
+            html += '<details style="margin-top:0.5rem;"><summary style="cursor:pointer; font-size:0.72rem; color:var(--muted);">Previous diagnostics (' + (reasons.length - 1) + ')</summary>';
+            for (let i = 1; i < reasons.length; i++) {
+              const r = reasons[i];
+              html += `<div style="margin-top:0.4rem; padding:0.3rem 0; border-top:1px solid var(--border);">`;
+              html += `<div style="color:var(--muted); font-size:0.65rem; margin-bottom:0.2rem;">${r.ts}</div>`;
+              html += renderDiagnosticEnglish(r.message);
+              html += '</div>';
+            }
+            html += '</details>';
+          }
+        }
+        // Show warnings
+        html += renderWarnings(warnings);
         list.innerHTML = html;
       } catch (e) {
         $("no-trade-list").innerHTML = `<span style="color:var(--red);">Error: ${e.message || e}</span>`;

@@ -300,7 +300,7 @@ def load_config() -> BotConfig:
         post_loss_extra_cooldown_sec=_env_int("POST_LOSS_EXTRA_COOLDOWN_SEC", 150),
         min_seconds_between_entry_orders=_env_int("MIN_SECONDS_BETWEEN_ENTRY_ORDERS", 2),
         entry_diagnostic_interval_sec=_env_int("ENTRY_DIAGNOSTIC_INTERVAL_SEC", 180),
-        max_open_positions=_env_int("MAX_OPEN_POSITIONS", 2),
+        max_open_positions=_env_int("MAX_OPEN_POSITIONS", 3),
         market_open_delay_minutes=_env_int("MARKET_OPEN_DELAY_MINUTES", 15),
         max_portfolio_notional_usd=_env_float("MAX_PORTFOLIO_NOTIONAL_USD", 10_000.0),
         enable_offline_training=_env_bool("ENABLE_OFFLINE_TRAINING", True),

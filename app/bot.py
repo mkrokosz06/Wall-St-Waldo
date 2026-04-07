@@ -1728,8 +1728,14 @@ class TradeBot:
         leg["stop_order_id"] = None
         pos_qty_now, _ = self._position_for_symbol(sym_u)
         if pos_qty_now <= 0:
-            self.logger.info("Market exit %s: position already flat after cancel.", sym_u)
             trade_total = float(leg.get("pending_exit_realized_accumulator") or 0)
+            self.logger.info(
+                "EXIT filled %s. exit_pnl=%.2f daily_realized_pnl=%.2f halt_new_entries=%s",
+                sym_u,
+                trade_total,
+                self.state.daily_realized_pnl,
+                self.state.halt_new_entries,
+            )
             leg["pending_exit_realized_accumulator"] = 0.0
             self._after_stop_or_exit_closed_leg(sym_u, trade_total)
             self.state_store.save(self.state)
@@ -1769,15 +1775,15 @@ class TradeBot:
             if self.state.daily_realized_pnl <= self.config.max_daily_realized_loss:
                 self.state.halt_new_entries = True
 
+            acc = float(leg.get("pending_exit_realized_accumulator") or 0)
+            trade_total = acc + realized
             self.logger.info(
                 "EXIT filled %s. exit_pnl=%.2f daily_realized_pnl=%.2f halt_new_entries=%s",
                 sym_u,
-                realized,
+                trade_total,
                 self.state.daily_realized_pnl,
                 self.state.halt_new_entries,
             )
-            acc = float(leg.get("pending_exit_realized_accumulator") or 0)
-            trade_total = acc + realized
             leg["pending_exit_realized_accumulator"] = 0.0
             self.state.exit_order_id = None
             self.state.exit_submitted_at = None
@@ -1792,6 +1798,13 @@ class TradeBot:
             if pos_qty <= 0:
                 trade_total = float(leg.get("pending_exit_realized_accumulator") or 0)
                 leg["pending_exit_realized_accumulator"] = 0.0
+                self.logger.info(
+                    "EXIT filled %s. exit_pnl=%.2f daily_realized_pnl=%.2f halt_new_entries=%s",
+                    sym_u,
+                    trade_total,
+                    self.state.daily_realized_pnl,
+                    self.state.halt_new_entries,
+                )
                 self.state.exit_order_id = None
                 self.state.exit_pending_symbol = None
                 self._after_stop_or_exit_closed_leg(sym_u, trade_total)
@@ -1902,6 +1915,10 @@ class TradeBot:
 
                 if self.state.state not in ("ENTRY_PENDING", "EXIT_PENDING") and not data_stale:
                     self._maybe_place_entry(loop_quotes=loop_quotes, bars_df=loop_bars)
+                elif data_stale:
+                    self._maybe_log_entry_diagnosis(
+                        pre_scan_reason="Market data stale — newest bar too old; skipping signal evaluation until fresh data arrives.",
+                    )
 
                 # Always persist occasionally (v1 simplicity).
                 # StateStore save happens in transitions, but not on every loop.

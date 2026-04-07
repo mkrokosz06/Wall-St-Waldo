@@ -81,29 +81,40 @@ def api_trades():
 
 @app.route("/api/no-trade-reasons")
 def api_no_trade_reasons():
-    """Return the most recent Entry diagnostic lines from the bot log."""
+    """Return the most recent Entry diagnostic lines and other relevant warnings from the bot log."""
     try:
         if not os.path.isfile(LOG_PATH):
-            return jsonify({"ok": True, "reasons": []})
-        # Read last 500 lines to find recent diagnostics
-        buf: collections.deque[str] = collections.deque(maxlen=500)
+            return jsonify({"ok": True, "reasons": [], "warnings": []})
+        # Read last 2000 lines to find recent diagnostics and warnings
+        buf: collections.deque[str] = collections.deque(maxlen=2000)
         with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 buf.append(line)
         results = []
+        warnings = []
         for line in reversed(buf):
-            if "Entry diagnostic:" not in line:
-                continue
             stripped = line.strip()
-            # Format: "2025-01-15 09:32:45.123 INFO Entry diagnostic: ..."
-            # Extract timestamp (first 23 chars) and message after "Entry diagnostic: "
             ts = stripped[:23] if len(stripped) >= 23 else ""
-            idx = stripped.find("Entry diagnostic:")
-            msg = stripped[idx:] if idx >= 0 else stripped
-            results.append({"ts": ts, "message": msg})
-            if len(results) >= 5:
-                break
-        return jsonify({"ok": True, "reasons": results})
+            if "Entry diagnostic:" in line and len(results) < 10:
+                idx = stripped.find("Entry diagnostic:")
+                msg = stripped[idx:] if idx >= 0 else stripped
+                results.append({"ts": ts, "message": msg})
+                continue
+            # Capture recent warnings that explain why the bot isn't trading
+            if len(warnings) < 5 and " WARNING " in line:
+                for tag in (
+                    "Market data stale",
+                    "halt_new_entries",
+                    "Loop quotes fetch failed",
+                    "data API auth",
+                    "Offline training failed",
+                ):
+                    if tag in line:
+                        idx_w = stripped.find("WARNING")
+                        msg_w = stripped[idx_w + 8:] if idx_w >= 0 else stripped
+                        warnings.append({"ts": ts, "message": msg_w})
+                        break
+        return jsonify({"ok": True, "reasons": results, "warnings": warnings})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
