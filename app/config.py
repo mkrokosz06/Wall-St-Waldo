@@ -93,6 +93,8 @@ class BotConfig:
     symbols_universe: List[str] = None  # type: ignore[assignment]
     market_open_time_et: str = "09:30"
     market_close_time_et: str = "16:00"
+    enable_extended_hours: bool = False
+    after_hours_end_et: str = "20:00"
 
     # --- Entry: momentum × volume score + filters (see strategy_signals.py) ---
     # Loosen defaults so we have enough bars for all tickers.
@@ -313,5 +315,7 @@ def load_config() -> BotConfig:
         trend_ma_tolerance_pct=_env_float("TREND_MA_TOLERANCE_PCT", 0.001),
         candlestick_wick_ratio=_env_float("CANDLESTICK_WICK_RATIO", 2.0),
         candlestick_sma_proximity_pct=_env_float("CANDLESTICK_SMA_PROXIMITY_PCT", 0.001),
+        enable_extended_hours=_env_bool("ENABLE_EXTENDED_HOURS", False),
+        after_hours_end_et=os.getenv("AFTER_HOURS_END_ET", "20:00"),
     )
 

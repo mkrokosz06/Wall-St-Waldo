@@ -198,6 +198,14 @@ class TradeBot:
             self.logger.warning("Clock fetch failed; assuming market closed: %s", e)
             return False
 
+    def _is_after_hours(self) -> bool:
+        if not self.config.enable_extended_hours:
+            return False
+        now_et = self._et_now()
+        close_hh, close_mm = _parse_time_hhmm_to_et(self.config.market_close_time_et)
+        close_time = now_et.replace(hour=close_hh, minute=close_mm, second=0, microsecond=0)
+        return now_et > close_time
+
     def _is_regular_hours(self) -> bool:
         # Additional guard around broker clock.
         now_et = self._et_now()
@@ -208,7 +216,13 @@ class TradeBot:
         close_hh, close_mm = _parse_time_hhmm_to_et(self.config.market_close_time_et)
         open_time = now_et.replace(hour=open_hh, minute=open_mm, second=0, microsecond=0)
         close_time = now_et.replace(hour=close_hh, minute=close_mm, second=0, microsecond=0)
-        return open_time <= now_et <= close_time
+        if open_time <= now_et <= close_time:
+            return True
+        if self.config.enable_extended_hours and now_et > close_time:
+            ah_hh, ah_mm = _parse_time_hhmm_to_et(self.config.after_hours_end_et)
+            ah_end = now_et.replace(hour=ah_hh, minute=ah_mm, second=0, microsecond=0)
+            return now_et <= ah_end
+        return False
 
     def _get_broker_ts(self) -> Optional[datetime]:
         """Return cached broker clock timestamp, refreshing at most once every 60 seconds."""
@@ -382,15 +396,27 @@ class TradeBot:
 
     def _place_stop_sell_at_price(self, symbol: str, qty: float, stop_price: float) -> str:
         stop_price_q = self._quantize_stop_price(stop_price)
-        payload = {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": "sell",
-            "type": "stop",
-            "time_in_force": "day",
-            # Send as string to avoid float representation issues.
-            "stop_price": str(stop_price_q),
-        }
+        if self._is_after_hours():
+            # Extended hours only supports limit orders; use a limit sell at stop price.
+            payload = {
+                "symbol": symbol,
+                "qty": str(qty),
+                "side": "sell",
+                "type": "limit",
+                "time_in_force": "day",
+                "limit_price": str(stop_price_q),
+                "extended_hours": True,
+            }
+        else:
+            payload = {
+                "symbol": symbol,
+                "qty": str(qty),
+                "side": "sell",
+                "type": "stop",
+                "time_in_force": "day",
+                # Send as string to avoid float representation issues.
+                "stop_price": str(stop_price_q),
+            }
         order = self.trading.submit_order(payload)
         order_id = order.get("id")
         if not order_id:
@@ -666,6 +692,8 @@ class TradeBot:
             if cur_raw in (None, ""):
                 cur_raw = order.get("stop_limit_price")
             if cur_raw in (None, ""):
+                cur_raw = order.get("limit_price")
+            if cur_raw in (None, ""):
                 return
             cur_stop = float(cur_raw)
             min_move = cur_stop * self.config.trailing_stop_min_move_pct
@@ -709,6 +737,8 @@ class TradeBot:
             "limit_price": str(limit_price_q),
             "client_order_id": client_order_id,
         }
+        if self._is_after_hours():
+            payload["extended_hours"] = True
         order = self.trading.submit_order(payload)
         order_id = order.get("id")
         if not order_id:
@@ -733,14 +763,36 @@ class TradeBot:
 
     def _place_market_sell(self, symbol: str, qty: float) -> str:
         client_order_id = f"exit_{symbol}_{int(time.time())}"
-        payload = {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": "sell",
-            "type": "market",
-            "time_in_force": "day",
-            "client_order_id": client_order_id,
-        }
+        if self._is_after_hours():
+            # Extended hours only supports limit orders; use bid price with a small markdown.
+            try:
+                quotes = self.market.get_latest_quotes([symbol])
+                q = quotes.get(symbol)
+                bid = float(q.bid) if q and float(q.bid) > 0 else float(q.ask) * 0.999 if q else None
+            except Exception:
+                bid = None
+            if not bid:
+                raise RuntimeError(f"Cannot place after-hours exit for {symbol}: no bid price available")
+            limit_price_q = self._quantize_stop_price(bid)
+            payload = {
+                "symbol": symbol,
+                "qty": str(qty),
+                "side": "sell",
+                "type": "limit",
+                "time_in_force": "day",
+                "limit_price": str(limit_price_q),
+                "extended_hours": True,
+                "client_order_id": client_order_id,
+            }
+        else:
+            payload = {
+                "symbol": symbol,
+                "qty": str(qty),
+                "side": "sell",
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": client_order_id,
+            }
         order = self.trading.submit_order(payload)
         order_id = order.get("id")
         if not order_id:
@@ -1690,7 +1742,10 @@ class TradeBot:
         return self._utc_now() >= target
 
     def _should_end_of_day_exit(self, now_et: datetime) -> bool:
-        hh, mm = _parse_time_hhmm_to_et(self.config.market_close_time_et)
+        if self.config.enable_extended_hours:
+            hh, mm = _parse_time_hhmm_to_et(self.config.after_hours_end_et)
+        else:
+            hh, mm = _parse_time_hhmm_to_et(self.config.market_close_time_et)
         close_dt = now_et.replace(hour=hh, minute=mm, second=0, microsecond=0)
         cutoff = close_dt - timedelta(minutes=self.config.end_of_day_flat_minutes)
         return now_et >= cutoff
@@ -1858,7 +1913,8 @@ class TradeBot:
 
                 self._reset_daily_if_needed()
 
-                if not self._is_market_open() or not self._is_regular_hours():
+                in_session = self._is_regular_hours()
+                if not in_session or (not self.config.enable_extended_hours and not self._is_market_open()):
                     time.sleep(10)
                     continue
 
