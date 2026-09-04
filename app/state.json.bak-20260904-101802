@@ -1,0 +1,59 @@
+{
+  "state": "FLAT",
+  "entry_order_id": null,
+  "entry_client_order_id": null,
+  "entry_symbol": null,
+  "entry_submitted_at": "2026-07-07T19:48:24.129654+00:00",
+  "entry_filled_qty": 0.0,
+  "entry_avg_price": null,
+  "entry_filled_at": null,
+  "stop_order_id": null,
+  "stop_submitted_at": null,
+  "exit_order_id": null,
+  "exit_submitted_at": null,
+  "day_utc": "2026-07-07",
+  "daily_realized_pnl": 22.978765420684823,
+  "halt_new_entries": false,
+  "day_start_equity": 100109.13,
+  "entry_attempts_today": 14,
+  "last_entry_attempt_at": "2026-07-07T19:48:24.129665+00:00",
+  "last_exit_at": "2026-07-07T19:40:38.362973+00:00",
+  "last_exit_pnl": -5.259120762349899,
+  "last_reconciled_at": null,
+  "dynamic_entry_score_threshold": -0.00025,
+  "dynamic_min_momentum_return": -0.00025,
+  "recent_trade_pnls": [
+    10.654893973034959,
+    4.878921039999896,
+    3.1130136899999954,
+    0.0,
+    4.131818279999911,
+    10.573712699999959,
+    -5.1144735,
+    -5.259120762349899
+  ],
+  "position_legs": {
+    "SQQQ": {
+      "stop_order_id": null,
+      "synthetic_stop_price": 40.445859999999996,
+      "peak_price_since_entry": 40.69,
+      "entry_filled_at": "2026-07-07T19:40:48.712311+00:00",
+      "entry_avg_price": 40.69,
+      "pending_exit_realized_accumulator": 0.0
+    }
+  },
+  "symbol_next_entry_ok_after": {
+    "SPY": "2026-04-20T18:37:52.280080+00:00",
+    "IWM": "2026-04-20T19:58:33.796745+00:00",
+    "QQQ": "2026-04-20T20:02:16.994788+00:00",
+    "SOXS": "2026-05-06T17:09:22.801273+00:00",
+    "SQQQ": "2026-07-07T19:35:36.701682+00:00",
+    "TQQQ": "2026-07-07T19:41:28.362973+00:00",
+    "SOXL": "2026-04-27T20:01:31.161418+00:00",
+    "UVXY": "2026-07-07T19:13:04.911251+00:00"
+  },
+  "exit_pending_symbol": null,
+  "pending_exit_symbols": [],
+  "peak_price_since_entry": null,
+  "pending_exit_realized_accumulator": 0.0
+}

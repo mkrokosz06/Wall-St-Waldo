@@ -169,6 +169,11 @@ class BotConfig:
     # which is uncompensated overnight gap risk on 3x leveraged ETFs.
     flatten_on_shutdown: bool = True
     flatten_stale_positions_on_start: bool = True
+    # Positions in symbols no longer in the universe are invisible to every exit
+    # rule, so nothing will ever close them. Narrowing SYMBOLS_UNIVERSE while a
+    # position is open is all it takes to create one. Set false only if this
+    # account also holds positions you manage by hand.
+    flatten_untracked_positions_on_start: bool = True
 
     # Trailing stop: ratchet protective stop up as price makes new highs (never loosened).
     enable_trailing_stop: bool = True
@@ -344,6 +349,7 @@ def load_config() -> BotConfig:
         # in .env while the bot actually ran the 0.012 default.
         flatten_on_shutdown=_env_bool("FLATTEN_ON_SHUTDOWN", True),
         flatten_stale_positions_on_start=_env_bool("FLATTEN_STALE_POSITIONS_ON_START", True),
+        flatten_untracked_positions_on_start=_env_bool("FLATTEN_UNTRACKED_POSITIONS_ON_START", True),
         stop_loss_pct=_env_float("STOP_LOSS_PCT", 0.006),
         take_profit_pct=_env_float("TAKE_PROFIT_PCT", 0.012),
         trailing_stop_pct=_env_float("TRAILING_STOP_PCT", 0.004),

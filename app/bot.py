@@ -293,6 +293,98 @@ class TradeBot:
         out.sort(key=lambda x: x[0])
         return out
 
+    def _list_untracked_long_positions(self) -> List[Tuple[str, float, float, float]]:
+        """
+        Long positions the bot cannot manage: symbols outside the configured
+        universe.
+
+        These are invisible to ``_list_universe_positions`` and therefore to
+        every exit rule, so nothing will ever close them. They appear whenever
+        the universe is narrowed while a position is open — which is exactly how
+        a fractional SQQQ position sat unprotected for two months, ending
+        -$49.72, after SQQQ was dropped from the universe.
+        """
+        universe = set(self.config.symbols_universe)
+        out: List[Tuple[str, float, float, float]] = []
+        for p in self.trading.get_positions():
+            sym = str(p.get("symbol", "")).upper()
+            if sym in universe:
+                continue
+            try:
+                qty = float(p.get("qty", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0:
+                continue
+            avg = float(p.get("avg_entry_price", 0) or 0)
+            try:
+                mv = float(p.get("market_value", 0) or 0)
+            except (TypeError, ValueError):
+                mv = 0.0
+            if mv <= 0 and avg > 0:
+                mv = qty * avg
+            out.append((sym, qty, avg, mv))
+        out.sort(key=lambda x: x[0])
+        return out
+
+    def _cancel_open_buy_orders(self, symbol: str) -> None:
+        """
+        Cancel any resting BUY order on ``symbol``.
+
+        Alpaca refuses a protective sell stop while an opposite-side limit order
+        is open ("potential wash trade detected", 403 40310000). That happens
+        whenever an entry limit fills partially: the filled shares need a stop,
+        but the unfilled remainder blocks it. Since the position already exists,
+        protecting it beats topping it up.
+        """
+        sym_u = symbol.upper()
+        try:
+            for o in self.trading.get_open_orders([sym_u]) or []:
+                if str(o.get("side", "")).lower() != "buy":
+                    continue
+                oid = o.get("id")
+                if not oid:
+                    continue
+                self.logger.info(
+                    "Cancelling residual entry order on %s (id=%s) so the stop can rest.",
+                    sym_u,
+                    oid,
+                )
+                self._cancel_order_safely(str(oid))
+        except Exception as e:
+            self.logger.warning("Could not cancel buy orders for %s (non-fatal): %s", sym_u, e)
+
+    def _flatten_symbols(self, symbols: List[str]) -> None:
+        """
+        Cancel resting orders and market-sell the given symbols only.
+
+        Unlike ``_flatten_and_stop`` this does not touch anything else, so it is
+        safe to call at startup while legitimate same-day universe positions are
+        open.
+        """
+        for sym in symbols:
+            sym_u = sym.upper()
+            try:
+                for o in self.trading.get_open_orders([sym_u]) or []:
+                    oid = o.get("id")
+                    if oid:
+                        self._cancel_order_safely(str(oid))
+            except Exception as e:
+                self.logger.warning("Could not cancel orders for %s (non-fatal): %s", sym_u, e)
+
+        if symbols:
+            time.sleep(1)
+
+        for sym in symbols:
+            sym_u = sym.upper()
+            try:
+                qty, _ = self._position_for_symbol(sym_u)
+                if qty > 0:
+                    self.logger.warning("Flattening untracked position: %s qty=%s", sym_u, qty)
+                    self._place_market_sell(sym_u, qty)
+            except Exception as e:
+                self.logger.error("Failed flattening %s: %s", sym_u, e)
+
     def _total_universe_market_value(self) -> float:
         return sum(p[3] for p in self._list_universe_positions())
 
@@ -1550,6 +1642,9 @@ class TradeBot:
                 synthetic_stop_price,
             )
         else:
+            # Same wash-trade guard as the reconcile path: a partially-filled
+            # entry limit still resting on the buy side blocks the stop.
+            self._cancel_open_buy_orders(sym_u)
             try:
                 sp = self._initial_stop_price(float(avg))
                 stop_id = self._place_stop_sell_at_price(
@@ -1813,6 +1908,12 @@ class TradeBot:
                     leg["peak_price_since_entry"] = entry_avg
                 self.state_store.save(self.state)
             else:
+                # A partially-filled entry limit order is still resting on the buy
+                # side here, and Alpaca rejects the protective stop against it as a
+                # "potential wash trade" (403 40310000, "opposite side limit order
+                # exists"). That leaves the filled shares unprotected for as long as
+                # the remainder takes to fill. Cancel the residual entry first.
+                self._cancel_open_buy_orders(sym)
                 try:
                     sp = self._initial_stop_price(entry_avg)
                     stop_id = self._place_stop_sell_at_price(symbol=sym, qty=broker_qty, stop_price=sp)
@@ -2057,6 +2158,21 @@ class TradeBot:
         self.logger.info("State loaded: state=%s daily_realized_pnl=%.2f halt_new_entries=%s", self.state.state, self.state.daily_realized_pnl, self.state.halt_new_entries)
 
         self._migrate_legacy_single_leg_if_needed()
+
+        # Positions outside the universe first: no exit rule can ever see them,
+        # so if the bot does not close them here nothing will.
+        if self.config.flatten_untracked_positions_on_start:
+            untracked = self._list_untracked_long_positions()
+            if untracked:
+                self.logger.warning(
+                    "Startup reconcile: %d long position(s) outside universe %s "
+                    "(no exit rule can manage these); flattening: %s",
+                    len(untracked),
+                    self.config.symbols_universe,
+                    ", ".join(f"{s} qty={q} mv={mv:.2f}" for s, q, _, mv in untracked),
+                )
+                self._flatten_symbols([s for s, _, _, _ in untracked])
+
         held = self._list_universe_positions()
 
         # A position that survived a restart across an ET date boundary was never
