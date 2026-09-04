@@ -57,9 +57,11 @@ class TradeBot:
         self.logger = logging.getLogger("trade_bot")
         self._setup_logging()
 
-        # halt_new_entries persists in state.json; broker/API halts (e.g. failed stop) survive restarts.
-        # If we're flat and not at the daily loss kill, clear a stale halt so restarts behave as expected.
-        self._maybe_clear_stale_halt_on_startup()
+        # NOTE: the stale-halt clear is deliberately NOT called here. state.state
+        # is still whatever was persisted, which after an exit that the bot never
+        # saw is a phantom IN_POSITION - and the clear bails out on any state
+        # other than FLAT. It runs in run_forever() instead, after the broker
+        # reconcile has established what is actually held.
 
         # Offline training: tune entry filters based on recent paper results in bot.log.
         if self.config.enable_offline_training:
@@ -2195,6 +2197,19 @@ class TradeBot:
                     self.state = self._flat_state_preserve_meta()
                     self.state_store.save(self.state)
 
+        if not held:
+            # Nothing is actually held: drop any phantom legs left by an exit the
+            # bot did not observe (a stop that filled while it was stopped), so
+            # the stale-halt check below sees the true state.
+            if self.state.position_legs or self.state.state != "FLAT":
+                self.logger.info(
+                    "Startup reconcile: broker is flat; clearing stale legs %s and state=%s.",
+                    list(self.state.position_legs),
+                    self.state.state,
+                )
+                self.state = self._flat_state_preserve_meta()
+                self.state_store.save(self.state)
+
         if held:
             self.state.state = "IN_POSITION"
             for pos_sym, pos_qty, pos_avg, _ in held:
@@ -2218,6 +2233,12 @@ class TradeBot:
                             existing_stop_id,
                         )
             self.state_store.save(self.state)
+
+        # Now that the broker reconcile has settled the real state, a halt left
+        # over from a transient failure (a rejected stop, stale data) can be
+        # cleared. Running this in __init__ meant it saw a phantom IN_POSITION
+        # and bailed, leaving the bot alive but permanently refusing entries.
+        self._maybe_clear_stale_halt_on_startup()
 
         while True:
             try:

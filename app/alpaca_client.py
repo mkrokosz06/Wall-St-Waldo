@@ -60,9 +60,23 @@ class AlpacaMarketData:
         # paper flag affects trading endpoints; market data endpoints are generally the same for alpaca-py.
         self.paper = paper
 
+        # Feed selection. IEX is the default and must stay the default for live
+        # trading: this subscription allows SIP only for *historical* bars, and
+        # answers a request for recent SIP data with
+        #   403 "subscription does not permit querying recent SIP data".
+        #
+        # That asymmetry is worth knowing about, because research/ builds its
+        # backtests on SIP while the live bot necessarily runs on IEX — a ~2%
+        # volume venue whose minute bars are sparse enough that the newest bar is
+        # often older than stale_data_max_age_sec (14,281 "Market data stale"
+        # warnings in bot.log). The live signal is therefore computed on a much
+        # thinner tape than any backtest assumes. Raising the feed to SIP would
+        # need a market-data subscription upgrade, not a config change.
+        feed_raw = os.getenv("ALPACA_DATA_FEED", "iex").strip().strip('"').strip("'").lower()
+        self.feed = {"sip": DataFeed.SIP, "iex": DataFeed.IEX}.get(feed_raw, DataFeed.IEX)
+
     def get_latest_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
-        # Force IEX feed to avoid SIP-premium requirements.
-        req = StockLatestQuoteRequest(symbol_or_symbols=symbols, feed=DataFeed.IEX)
+        req = StockLatestQuoteRequest(symbol_or_symbols=symbols, feed=self.feed)
         resp = self._historical.get_stock_latest_quote(req)
 
         out: Dict[str, Quote] = {}
@@ -88,7 +102,7 @@ class AlpacaMarketData:
             timeframe=timeframe,
             start=start,
             end=end,
-            feed=DataFeed.IEX,
+            feed=self.feed,
         )
         resp = self._historical.get_stock_bars(request)
         # Expected: resp.df is a pandas DataFrame with a MultiIndex [symbol, timestamp]

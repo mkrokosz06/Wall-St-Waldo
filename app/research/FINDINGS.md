@@ -472,6 +472,14 @@ is what would restore breadth.
 ## What this study cannot tell you
 
 - Whether the strategy works in a different regime. Eight months is one draw.
+- **The live bot and the backtest read different tapes.** Every backtest here is
+  built on SIP (full consolidated tape). The live bot cannot use it: this
+  subscription permits SIP for *historical* bars only and answers a request for
+  recent SIP data with `403 "subscription does not permit querying recent SIP
+  data"`. Live therefore runs on IEX, a ~2% volume venue. The entry score is
+  `momentum_return * log1p(volume_ratio)`, and the volume term in particular is
+  measuring something materially different live than in any backtest above.
+  Closing this gap needs a market-data subscription upgrade, not a config change.
 - Whether real fills match the model. Spread and slippage are modelled constants
   (2 bp / 1 bp); the live log's 539 `spread_too_wide` rejections say real
   spreads are often wider. Every backtest number here is therefore optimistic.
