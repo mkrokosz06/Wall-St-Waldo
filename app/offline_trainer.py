@@ -40,6 +40,14 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
+def _ewa(pnls: List[float], decay: float = 0.9) -> float:
+    """Exponential weighted average — recent trades count more. decay=0.9 → ~6.6-trade half-life."""
+    if not pnls:
+        return 0.0
+    weights = [decay ** (len(pnls) - 1 - i) for i in range(len(pnls))]
+    return sum(w * p for w, p in zip(weights, pnls)) / sum(weights)
+
+
 @dataclass(frozen=True)
 class TrainingResult:
     dynamic_entry_score_threshold: float
@@ -59,7 +67,7 @@ def train_from_bot_log(cfg: BotConfig, state: BotState, bot_log_path: str = "bot
             n_trades=0,
         )
 
-    avg = sum(pnls) / len(pnls)
+    avg = _ewa(pnls)
 
     # Simple nudging rule:
     # - If avg is positive: be more aggressive (lower score cutoff; allow more negative momentum)

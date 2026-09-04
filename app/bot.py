@@ -13,7 +13,7 @@ import pandas as pd
 
 from alpaca_client import AlpacaMarketData, AlpacaTradingREST
 from config import ET_TZ, BotConfig, load_config, resolve_bot_log_path
-from offline_trainer import extract_recent_exit_pnls_from_log, train_from_bot_log
+from offline_trainer import extract_recent_exit_pnls_from_log, train_from_bot_log, _ewa
 from state_store import BotState, StateStore
 from strategy_signals import (
     bearish_candlestick_exit,
@@ -511,7 +511,7 @@ class TradeBot:
             )
             return
 
-        avg = sum(pnls) / len(pnls)
+        avg = _ewa(pnls)
         band = float(self.config.online_training_neutral_band_abs_usd)
         if abs(avg) <= band:
             self.state.dynamic_entry_score_threshold = None
@@ -743,6 +743,31 @@ class TradeBot:
         order_id = order.get("id")
         if not order_id:
             raise RuntimeError(f"Entry order did not return id: {order}")
+        return str(order_id)
+
+    def _place_notional_market_buy_and_mark_pending(
+        self, symbol: str, notional_usd: float
+    ) -> str:
+        """
+        Submit a notional (dollar-sized) market BUY. Alpaca accepts notional only
+        on market orders with time_in_force=day, and only during regular hours.
+        Fractional fills are expected.
+        """
+        client_order_id = f"entry_{symbol}_{int(time.time())}"
+        # Alpaca expects 2 decimal places for notional.
+        notional_q = f"{max(float(notional_usd), 0.0):.2f}"
+        payload = {
+            "symbol": symbol,
+            "notional": notional_q,
+            "side": "buy",
+            "type": "market",
+            "time_in_force": "day",
+            "client_order_id": client_order_id,
+        }
+        order = self.trading.submit_order(payload)
+        order_id = order.get("id")
+        if not order_id:
+            raise RuntimeError(f"Notional entry order did not return id: {order}")
         return str(order_id)
 
     def _quantize_limit_price(self, price: float) -> Decimal:
@@ -1263,7 +1288,57 @@ class TradeBot:
         qty = min(qty_by_risk, qty_by_cash * 0.98, qty_by_portfolio_cap)
         if qty <= 0:
             return 0.0
+
+        if not self.config.use_notional_market_entry:
+            # This path submits a LIMIT buy, and Alpaca rejects limit orders on
+            # fractional quantities with HTTP 422 — 647 of those in bot.log.
+            # Worse, the fractional fills that did get through could not carry a
+            # broker stop (also whole-share only), which is what forced the
+            # synthetic in-loop stop that is losing ~$6 per stop-out against a
+            # $0.60 intended risk. Floor to whole shares so every position can
+            # rest a real stop at the broker.
+            qty = math.floor(qty)
+            if qty < 1:
+                return 0.0
+
         return float(round(qty, 6))
+
+    def _compute_notional_for_entry(self, entry_price: float) -> float:
+        """
+        Dollar-sized version of _compute_qty_for_entry for notional market buys.
+        Returns 0.0 if the daily risk kill-switch is active, cash is empty, or
+        portfolio cap has no room.
+        """
+        kill_threshold = self.config.max_daily_realized_loss
+        daily_pnl = self.state.daily_realized_pnl
+        if daily_pnl <= kill_threshold:
+            return 0.0
+
+        remaining_allowed_loss_mag = abs(kill_threshold - daily_pnl)
+        risk_per_trade = min(self.config.max_risk_per_trade, remaining_allowed_loss_mag)
+
+        stop_pct = self.config.stop_loss_pct
+        if stop_pct <= 0:
+            return 0.0
+        # position_value * stop_pct = risk_per_trade  =>  position_value = risk / stop_pct
+        notional_by_risk = risk_per_trade / stop_pct
+
+        account = self.trading.get_account()
+        cash = float(account.get("cash") or 0.0)
+        if cash <= 0:
+            return 0.0
+        notional_by_cash = cash * 0.98
+
+        cap = float(self.config.max_portfolio_notional_usd)
+        invested = self._total_universe_market_value()
+        room_usd = max(0.0, cap - invested)
+        notional_by_portfolio_cap = room_usd * 0.98
+
+        notional = min(notional_by_risk, notional_by_cash, notional_by_portfolio_cap)
+        if notional < self.config.notional_entry_min_usd:
+            return 0.0
+        # Alpaca expects 2 decimal precision.
+        return float(round(notional, 2))
 
     def _maybe_place_entry(
         self,
@@ -1359,16 +1434,37 @@ class TradeBot:
             )
             return
 
-        qty = self._compute_qty_for_entry(limit_price)
-        if qty <= 0:
-            self.logger.info("Computed qty too small; skipping entry.")
-            self._maybe_log_entry_diagnosis(
-                pre_scan_reason="Candidate passed filters but qty=0 (daily risk kill, cash, or portfolio notional cap).",
-                held_syms=held_syms,
-            )
-            return
+        if self.config.use_notional_market_entry:
+            notional = self._compute_notional_for_entry(limit_price)
+            if notional <= 0:
+                self.logger.info("Computed notional too small; skipping entry.")
+                self._maybe_log_entry_diagnosis(
+                    pre_scan_reason="Candidate passed filters but notional<min (daily risk kill, cash, or portfolio notional cap).",
+                    held_syms=held_syms,
+                )
+                return
+            if self._is_after_hours():
+                # Notional orders must be regular-hours market. Skip instead of submitting a reject.
+                self.logger.info("Notional market entry not supported after hours; skipping.")
+                self._maybe_log_entry_diagnosis(
+                    pre_scan_reason="Notional market entry requires regular hours.",
+                    held_syms=held_syms,
+                )
+                return
+            order_id = self._place_notional_market_buy_and_mark_pending(candidate, notional_usd=notional)
+            qty_for_log = f"notional=${notional:.2f}"
+        else:
+            qty = self._compute_qty_for_entry(limit_price)
+            if qty <= 0:
+                self.logger.info("Computed qty too small; skipping entry.")
+                self._maybe_log_entry_diagnosis(
+                    pre_scan_reason="Candidate passed filters but qty=0 (daily risk kill, cash, or portfolio notional cap).",
+                    held_syms=held_syms,
+                )
+                return
+            order_id = self._place_limit_buy_and_mark_pending(candidate, qty=qty, limit_price=limit_price)
+            qty_for_log = f"qty={qty}"
 
-        order_id = self._place_limit_buy_and_mark_pending(candidate, qty=qty, limit_price=limit_price)
         self.state.state = "ENTRY_PENDING"
         self.state.entry_order_id = order_id
         self.state.entry_client_order_id = None
@@ -1389,9 +1485,9 @@ class TradeBot:
         self.state_store.save(self.state)
 
         self.logger.info(
-            "Placed ENTRY limit buy: %s qty=%s limit=%.6f score=%.6f spread_pct=%.6f order_id=%s",
+            "Placed ENTRY: %s %s limit=%.6f score=%.6f spread_pct=%.6f order_id=%s",
             candidate,
-            qty,
+            qty_for_log,
             limit_price,
             score,
             spread_pct if spread_pct is not None else float("nan"),
@@ -1431,24 +1527,57 @@ class TradeBot:
             self.logger.warning("FLAT cleanup failed (non-fatal): %s", e)
 
     def _open_leg_after_buy_fill(self, sym: str, qty: float, avg: float) -> bool:
-        """Place protective stop and record `position_legs` for a new fill. Returns False if stop failed."""
+        """Place protective stop and record `position_legs` for a new fill.
+
+        Alpaca rejects stop orders on fractional positions, so if qty is not a
+        whole number we set a synthetic_stop_price on the leg and monitor it in
+        the main loop. The same fallback now covers a failed broker stop, so the
+        leg is always recorded and always has *some* protective level. Always
+        returns True; check ``state.halt_new_entries`` to see whether the stop
+        had to fall back.
+        """
         sym_u = sym.upper()
-        try:
-            sp = self._initial_stop_price(float(avg))
-            stop_id = self._place_stop_sell_at_price(
-                symbol=sym_u,
-                qty=float(qty),
-                stop_price=sp,
+        stop_id: Optional[str] = None
+        synthetic_stop_price: Optional[float] = None
+        is_fractional = abs(float(qty) - round(float(qty))) > 1e-9
+
+        if is_fractional:
+            synthetic_stop_price = float(self._initial_stop_price(float(avg)))
+            self.logger.info(
+                "Fractional fill (%s qty=%s); using synthetic stop at %.4f (Alpaca stops are whole-share only).",
+                sym_u,
+                qty,
+                synthetic_stop_price,
             )
-        except Exception as e:
-            self.logger.error("Failed placing stop-loss (SAFE STOP). error=%s", e)
-            self.state.halt_new_entries = True
-            self.state_store.save(self.state)
-            return False
+        else:
+            try:
+                sp = self._initial_stop_price(float(avg))
+                stop_id = self._place_stop_sell_at_price(
+                    symbol=sym_u,
+                    qty=float(qty),
+                    stop_price=sp,
+                )
+            except Exception as e:
+                # Previously this returned False *before* recording the leg, so a
+                # position that existed at the broker was left with no stop and no
+                # state entry at all — 808 of these in bot.log, and the orphaned
+                # positions they created are what the overnight-gap losses came
+                # from. Record the leg with a synthetic stop instead: an in-loop
+                # stop is much worse than a resting broker stop, but it is far
+                # better than an unprotected position nobody is tracking.
+                synthetic_stop_price = float(self._initial_stop_price(float(avg)))
+                self.logger.error(
+                    "Failed placing stop-loss (SAFE STOP); falling back to synthetic "
+                    "stop at %.4f and halting new entries. error=%s",
+                    synthetic_stop_price,
+                    e,
+                )
+                self.state.halt_new_entries = True
 
         now = self._utc_now()
         self.state.position_legs[sym_u] = {
             "stop_order_id": stop_id,
+            "synthetic_stop_price": synthetic_stop_price,
             "peak_price_since_entry": float(avg),
             "entry_filled_at": now.isoformat(),
             "entry_avg_price": float(avg),
@@ -1465,11 +1594,12 @@ class TradeBot:
         self.state.peak_price_since_entry = float(avg)
         self.state_store.save(self.state)
         self.logger.info(
-            "ENTRY filled: symbol=%s qty=%s avg_price=%.6f. Stop-loss placed id=%s",
+            "ENTRY filled: symbol=%s qty=%s avg_price=%.6f stop_id=%s synthetic_stop=%s",
             sym_u,
             qty,
             avg,
             stop_id,
+            synthetic_stop_price,
         )
         return True
 
@@ -1604,6 +1734,7 @@ class TradeBot:
             sym,
             {
                 "stop_order_id": None,
+                "synthetic_stop_price": None,
                 "peak_price_since_entry": float(broker_avg),
                 "entry_filled_at": None,
                 "entry_avg_price": float(broker_avg),
@@ -1617,6 +1748,53 @@ class TradeBot:
             leg["entry_filled_at"] = self._utc_now().isoformat()
             self.state_store.save(self.state)
         entry_filled_at = self._leg_filled_at_dt(leg)
+
+        # Synthetic stop (fractional positions): check current bid vs stored stop price
+        # and market-sell if breached. Runs before the Alpaca-stop reconcile so it
+        # does not try to place a whole-share stop on a fractional position.
+        synth_stop = leg.get("synthetic_stop_price")
+        if synth_stop and broker_qty > 0:
+            try:
+                if loop_quotes is not None:
+                    q = loop_quotes.get(sym)
+                else:
+                    quotes = self.market.get_latest_quotes([sym])
+                    q = quotes.get(sym)
+                if q and float(q.bid) > 0 and float(q.bid) <= float(synth_stop):
+                    self.logger.info(
+                        "Synthetic stop breached %s: bid=%.4f <= stop=%.4f; market sell.",
+                        sym,
+                        float(q.bid),
+                        float(synth_stop),
+                    )
+                    self._queue_or_execute_market_exit(sym, broker_qty)
+                    return
+            except Exception as e:
+                self.logger.warning("Synthetic stop check failed (non-fatal): %s", e)
+            # When synthetic stop is in charge, do not try to place an Alpaca stop.
+            if self.config.enable_take_profit and entry_avg > 0:
+                try:
+                    if loop_quotes is not None:
+                        q = loop_quotes.get(sym)
+                    else:
+                        quotes = self.market.get_latest_quotes([sym])
+                        q = quotes.get(sym)
+                    if q and float(q.bid) >= float(entry_avg) * (1.0 + self.config.take_profit_pct):
+                        self.logger.info("Take-profit triggered (synthetic); exiting %s with market sell.", sym)
+                        self._queue_or_execute_market_exit(sym, broker_qty)
+                        return
+                except Exception:
+                    pass
+            now_et_syn = self._et_now()
+            if self._should_time_stop(now_et_syn, entry_filled_at):
+                self.logger.info("Time stop reached (synthetic); market sell %s", sym)
+                self._queue_or_execute_market_exit(sym, broker_qty)
+                return
+            if self._should_end_of_day_exit(now_et_syn):
+                self.logger.info("End-of-day cutoff (synthetic); flattening %s", sym)
+                self._log_day_end_equity()
+                self._queue_or_execute_market_exit(sym, broker_qty)
+            return
 
         stop_ok = bool(leg.get("stop_order_id"))
         if not stop_ok:
@@ -1880,6 +2058,27 @@ class TradeBot:
 
         self._migrate_legacy_single_leg_if_needed()
         held = self._list_universe_positions()
+
+        # A position that survived a restart across an ET date boundary was never
+        # meant to exist: the bot is intraday and the end-of-day flatten simply
+        # did not get to run. Adopting it silently is how the log ended up with
+        # 11 accidental overnight holds. Close it before doing anything else.
+        if held and self.config.flatten_stale_positions_on_start:
+            today_et = self._et_now().date().isoformat()
+            if self.state.day_utc != today_et:
+                self.logger.warning(
+                    "Startup reconcile: %d position(s) carried from %s into %s "
+                    "(overnight hold was not intended); flattening.",
+                    len(held),
+                    self.state.day_utc,
+                    today_et,
+                )
+                self._flatten_and_stop()
+                held = self._list_universe_positions()
+                if not held:
+                    self.state = self._flat_state_preserve_meta()
+                    self.state_store.save(self.state)
+
         if held:
             self.state.state = "IN_POSITION"
             for pos_sym, pos_qty, pos_avg, _ in held:
@@ -1981,7 +2180,18 @@ class TradeBot:
 
                 time.sleep(self.config.loop_interval_sec)
             except KeyboardInterrupt:
-                self.logger.warning("KeyboardInterrupt received; saving state and exiting.")
+                # Do NOT just save and exit. The end-of-day flatten only runs
+                # while the loop is alive, so exiting with a position open leaves
+                # unmanaged overnight gap risk on 3x leveraged ETFs. In bot.log
+                # that path produced 86% of all realised P&L — and the single
+                # worst trade, -$19.92 on one gap, four times the intended stop.
+                self.logger.warning("KeyboardInterrupt received; flattening before exit.")
+                if self.config.flatten_on_shutdown:
+                    self._flatten_and_stop()
+                else:
+                    self.logger.warning(
+                        "flatten_on_shutdown=False; leaving open positions in place."
+                    )
                 self.state_store.save(self.state)
                 return
             except Exception as e:

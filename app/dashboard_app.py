@@ -17,7 +17,7 @@ import subprocess
 import sys
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from zoneinfo import ZoneInfo
 
 from config import ET_TZ, load_config, resolve_bot_log_path
@@ -36,6 +36,53 @@ app = Flask(
     template_folder=os.path.join(APP_ROOT, "templates"),
     static_folder=os.path.join(APP_ROOT, "static"),
 )
+
+
+ENV_PATH = os.path.join(APP_ROOT, ".env")
+
+# Config keys exposed to the dashboard editor, with their types
+_EDITABLE_KEYS = {
+    "MAX_OPEN_POSITIONS":           int,
+    "MAX_PORTFOLIO_NOTIONAL_USD":   float,
+    "ENTRY_COOLDOWN_SEC":           int,
+    "POST_LOSS_EXTRA_COOLDOWN_SEC": int,
+    "MARKET_OPEN_DELAY_MINUTES":    int,
+    "MAX_DAILY_REALIZED_LOSS":      float,
+    "STOP_LOSS_PCT":                float,
+    "TAKE_PROFIT_PCT":              float,
+    "TRAILING_STOP_PCT":            float,
+    "MIN_AVG_VOLUME":               float,
+}
+
+
+def _read_env_file() -> list[str]:
+    if not os.path.exists(ENV_PATH):
+        return []
+    with open(ENV_PATH, "r", encoding="utf-8") as f:
+        return f.readlines()
+
+
+def _write_env_updates(updates: dict) -> None:
+    """Overwrite matching keys in .env; append any that don't exist yet."""
+    lines = _read_env_file()
+    applied: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}\n")
+            applied.add(key)
+        else:
+            new_lines.append(line)
+    for key, val in updates.items():
+        if key not in applied:
+            new_lines.append(f"{key}={val}\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
 
 
 def _et_today_str() -> str:
@@ -198,6 +245,65 @@ def api_stop():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "message": "Ran stop_bot.py (flatten + kill)"})
+
+
+@app.route("/api/config")
+def api_config_get():
+    try:
+        cfg = load_config()
+        return jsonify({
+            "MAX_OPEN_POSITIONS":           cfg.max_open_positions,
+            "MAX_PORTFOLIO_NOTIONAL_USD":   cfg.max_portfolio_notional_usd,
+            "ENTRY_COOLDOWN_SEC":           cfg.entry_cooldown_sec,
+            "POST_LOSS_EXTRA_COOLDOWN_SEC": cfg.post_loss_extra_cooldown_sec,
+            "MARKET_OPEN_DELAY_MINUTES":    cfg.market_open_delay_minutes,
+            "MAX_DAILY_REALIZED_LOSS":      cfg.max_daily_realized_loss,
+            "STOP_LOSS_PCT":                cfg.stop_loss_pct,
+            "TAKE_PROFIT_PCT":              cfg.take_profit_pct,
+            "TRAILING_STOP_PCT":            cfg.trailing_stop_pct,
+            "MIN_AVG_VOLUME":               cfg.min_avg_volume,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/config", methods=["POST"])
+def api_config_save():
+    try:
+        data = request.get_json(force=True) or {}
+        env_updates: dict[str, str] = {}
+        errors: list[str] = []
+        for key, cast in _EDITABLE_KEYS.items():
+            if key not in data:
+                continue
+            try:
+                val = cast(data[key])
+            except (TypeError, ValueError):
+                errors.append(f"{key}: invalid value '{data[key]}'")
+                continue
+            # Validation
+            if key == "MAX_OPEN_POSITIONS" and val < 1:
+                errors.append("MAX_OPEN_POSITIONS must be ≥ 1"); continue
+            if key == "MAX_PORTFOLIO_NOTIONAL_USD" and val <= 0:
+                errors.append("MAX_PORTFOLIO_NOTIONAL_USD must be > 0"); continue
+            if key == "MAX_DAILY_REALIZED_LOSS" and val >= 0:
+                errors.append("MAX_DAILY_REALIZED_LOSS must be negative"); continue
+            if key == "STOP_LOSS_PCT" and val <= 0:
+                errors.append("STOP_LOSS_PCT must be > 0"); continue
+            if key == "TAKE_PROFIT_PCT" and val <= 0:
+                errors.append("TAKE_PROFIT_PCT must be > 0"); continue
+            if key == "MIN_AVG_VOLUME" and val < 0:
+                errors.append("MIN_AVG_VOLUME must be ≥ 0"); continue
+            # Store floats with enough precision
+            env_updates[key] = str(val) if cast is int else f"{val:.6g}"
+        if errors:
+            return jsonify({"ok": False, "error": "; ".join(errors)}), 400
+        _write_env_updates(env_updates)
+        # Reload env in dashboard process so next status call reflects changes
+        load_dotenv(dotenv_path=ENV_PATH, override=True)
+        return jsonify({"ok": True, "message": f"Saved {len(env_updates)} setting(s). Restart bot to apply."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 def main() -> None:

@@ -52,15 +52,17 @@ def _env_int(name: str, default: int) -> int:
 
 def _default_symbol_score_adjustments() -> Dict[str, float]:
     """
-    Added to (momentum×volume) score before the entry threshold.
-    From bot.log aggregates: SPY / IWM net negative; QQQ / VTI net positive — nudge selection accordingly.
+    Added to (momentum x volume) score before the entry threshold.
+    Default universe is now leveraged ETFs (TQQQ, SOXL, SQQQ, UVXY, SOXS).
+    No log history on these yet, so adjustments start at 0 and online training
+    will learn per-symbol bias from live paper results.
     """
     return {
-        "SPY": -0.0004,
-        "IWM": -0.00025,
-        "QQQ": 0.00006,
-        "VTI": 0.00008,
-        "DIA": 0.0,
+        "TQQQ": 0.0,
+        "SOXL": 0.0,
+        "SQQQ": 0.0,
+        "UVXY": 0.0,
+        "SOXS": 0.0,
     }
 
 
@@ -100,9 +102,9 @@ class BotConfig:
     # Loosen defaults so we have enough bars for all tickers.
     momentum_lookback_minutes: int = 10
     volume_lookback_minutes: int = 10
-    # Score = momentum_return * log1p(volume_ratio). Tighter defaults = fewer, pickier entries.
-    entry_score_threshold: float = -0.0005
-    min_momentum_return: float = -0.0005
+    # Score = momentum_return * log1p(volume_ratio). Require non-negative momentum to avoid buying dips.
+    entry_score_threshold: float = 0.0
+    min_momentum_return: float = 0.0
     max_spread_pct: float = 0.001  # 0.10% — skip wide books
     min_avg_volume: float = 2000  # slightly more liquidity than bare minimum
     # Per-symbol score nudge (see _parse_symbol_score_adjustments).
@@ -115,7 +117,8 @@ class BotConfig:
     # How far below the fast MA the last close can be and still count as "uptrend".
     trend_ma_tolerance_pct: float = 0.001  # 0.10% below fast MA allowed
     # Require SPY (if in universe) to also be in uptrend before any buy.
-    enable_spy_market_trend_filter: bool = True
+    # Default off now: leveraged-ETF universe does not include SPY.
+    enable_spy_market_trend_filter: bool = False
 
     # Optional candlestick boost/gate (often too strict if enabled as hard gate).
     enable_candlestick_entry_filter: bool = False
@@ -134,6 +137,14 @@ class BotConfig:
     # Execution (entry)
     entry_limit_offset_pct: float = 0.0001  # 0.01% above best bid (approx)
     entry_timeout_sec: int = 20
+    # If true, the entry places a notional market BUY (dollar-sized, fractional ok)
+    # instead of a whole-share limit BUY. Alpaca rejects limit orders on fractional
+    # shares, so this path is required when 1 whole share does not fit in cash.
+    # Trade-off: stop-loss orders are rejected by Alpaca on fractional positions,
+    # so the bot falls back to a synthetic stop that market-sells when breached.
+    use_notional_market_entry: bool = False
+    # Minimum notional dollars for a notional market buy (Alpaca minimum is $1).
+    notional_entry_min_usd: float = 1.0
     entry_cooldown_sec: int = 180
     # Extra seconds after a losing exit before the next entry (reduces revenge churn).
     post_loss_extra_cooldown_sec: int = 150
@@ -152,6 +163,12 @@ class BotConfig:
     enable_time_stop: bool = False
     time_stop_minutes: int = 240
     end_of_day_flat_minutes: int = 5
+
+    # The end-of-day flatten only runs while the loop is alive. Without these two
+    # the bot leaves open positions behind whenever it is stopped or crashes,
+    # which is uncompensated overnight gap risk on 3x leveraged ETFs.
+    flatten_on_shutdown: bool = True
+    flatten_stale_positions_on_start: bool = True
 
     # Trailing stop: ratchet protective stop up as price makes new highs (never loosened).
     enable_trailing_stop: bool = True
@@ -174,7 +191,7 @@ class BotConfig:
     # Take-profit (sell for gain) rule:
     # If price rises by this percent above entry during the holding window, the bot will sell early.
     enable_take_profit: bool = True
-    take_profit_pct: float = 0.009  # +0.9% — 1.5:1 reward-to-risk vs 0.6% stop
+    take_profit_pct: float = 0.012  # +1.2% — 2:1 reward-to-risk vs 0.6% stop
 
     # Risk: your requested rules
     max_daily_realized_loss: float = -20.0  # realized P&L after exits only
@@ -183,18 +200,18 @@ class BotConfig:
     # Offline "training" from recent paper results (bot.log).
     # This is a simple parameter nudging based on realized P&L (no ML).
     enable_offline_training: bool = True
-    offline_training_lookback_trades: int = 15
+    offline_training_lookback_trades: int = 50
     offline_training_step_score: float = 0.00025
     offline_training_step_momentum: float = 0.00025
     offline_training_max_entry_score_threshold: float = 0.005
     offline_training_min_entry_score_threshold: float = -0.005
     offline_training_max_min_momentum_return: float = 0.005
-    offline_training_min_min_momentum_return: float = -0.01
+    offline_training_min_min_momentum_return: float = -0.002  # prevent drifting back to buying dips
 
-    # Online training: rolling window of closed-trade P&amp;L; thresholds follow mean(window), not last trade.
+    # Online training: rolling window of closed-trade P&amp;L; thresholds follow EWA(window), not last trade.
     enable_online_training: bool = True
-    online_training_window_trades: int = 20
-    online_training_min_trades: int = 3
+    online_training_window_trades: int = 50
+    online_training_min_trades: int = 10
     # If abs(mean window) <= this ($), clear dynamic knobs (use config defaults).
     online_training_neutral_band_abs_usd: float = 0.05
     online_training_step_score: float = 0.00015
@@ -210,7 +227,7 @@ class BotConfig:
     # Data
     # Must cover trend_ma_slow + buffer for dual-MA filter.
     bars_lookback_minutes_for_scoring: int = 45
-    stale_data_max_age_sec: int = 20
+    stale_data_max_age_sec: int = 90
 
     def validate(self) -> None:
         """Raise ValueError on contradictory settings; warn on suspicious ones."""
@@ -256,7 +273,9 @@ def load_config() -> BotConfig:
     if symbols:
         universe = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
-        universe = ["SPY", "QQQ", "IWM", "DIA", "VTI"]
+        # Leveraged ETFs (3x) so whole-share math works on a ~$100 account and
+        # percent-based stops/targets translate to bigger dollar swings.
+        universe = ["TQQQ", "SOXL", "SQQQ", "UVXY", "SOXS"]
 
     # Keys in .env files are sometimes pasted with surrounding quotes.
     # Strip quotes so auth doesn't fail.
@@ -294,8 +313,8 @@ def load_config() -> BotConfig:
         symbol_score_adjustments=_parse_symbol_score_adjustments(),
         trend_break_skip_if_profitable=_env_bool("TREND_BREAK_SKIP_IF_PROFITABLE", True),
         trend_break_min_profit_pct_to_skip=_env_float("TREND_BREAK_MIN_PROFIT_PCT_TO_SKIP", 0.0),
-        entry_score_threshold=_env_float("ENTRY_SCORE_THRESHOLD", -0.0005),
-        min_momentum_return=_env_float("MIN_MOMENTUM_RETURN", -0.0005),
+        entry_score_threshold=_env_float("ENTRY_SCORE_THRESHOLD", 0.0),
+        min_momentum_return=_env_float("MIN_MOMENTUM_RETURN", 0.0),
         max_spread_pct=_env_float("MAX_SPREAD_PCT", 0.001),
         min_avg_volume=_env_float("MIN_AVG_VOLUME", 2000.0),
         entry_cooldown_sec=_env_int("ENTRY_COOLDOWN_SEC", 180),
@@ -306,10 +325,10 @@ def load_config() -> BotConfig:
         market_open_delay_minutes=_env_int("MARKET_OPEN_DELAY_MINUTES", 15),
         max_portfolio_notional_usd=_env_float("MAX_PORTFOLIO_NOTIONAL_USD", 10_000.0),
         enable_offline_training=_env_bool("ENABLE_OFFLINE_TRAINING", True),
-        offline_training_lookback_trades=_env_int("OFFLINE_TRAINING_LOOKBACK_TRADES", 15),
+        offline_training_lookback_trades=_env_int("OFFLINE_TRAINING_LOOKBACK_TRADES", 50),
         enable_online_training=_env_bool("ENABLE_ONLINE_TRAINING", True),
-        online_training_window_trades=_env_int("ONLINE_TRAINING_WINDOW_TRADES", 20),
-        online_training_min_trades=_env_int("ONLINE_TRAINING_MIN_TRADES", 3),
+        online_training_window_trades=_env_int("ONLINE_TRAINING_WINDOW_TRADES", 50),
+        online_training_min_trades=_env_int("ONLINE_TRAINING_MIN_TRADES", 10),
         online_training_neutral_band_abs_usd=_env_float("ONLINE_TRAINING_NEUTRAL_BAND_ABS_USD", 0.05),
         trailing_stop_min_move_pct=_env_float("TRAILING_STOP_MIN_MOVE_PCT", 0.0002),
         trend_ma_tolerance_pct=_env_float("TREND_MA_TOLERANCE_PCT", 0.001),
@@ -317,5 +336,16 @@ def load_config() -> BotConfig:
         candlestick_sma_proximity_pct=_env_float("CANDLESTICK_SMA_PROXIMITY_PCT", 0.001),
         enable_extended_hours=_env_bool("ENABLE_EXTENDED_HOURS", False),
         after_hours_end_et=os.getenv("AFTER_HOURS_END_ET", "20:00"),
+        use_notional_market_entry=_env_bool("USE_NOTIONAL_MARKET_ENTRY", False),
+        notional_entry_min_usd=_env_float("NOTIONAL_ENTRY_MIN_USD", 1.0),
+        stale_data_max_age_sec=_env_int("STALE_DATA_MAX_AGE_SEC", 90),
+        # These three were documented in .env.example and set in .env but never
+        # read here, so the file silently had no effect: TAKE_PROFIT_PCT=0.009
+        # in .env while the bot actually ran the 0.012 default.
+        flatten_on_shutdown=_env_bool("FLATTEN_ON_SHUTDOWN", True),
+        flatten_stale_positions_on_start=_env_bool("FLATTEN_STALE_POSITIONS_ON_START", True),
+        stop_loss_pct=_env_float("STOP_LOSS_PCT", 0.006),
+        take_profit_pct=_env_float("TAKE_PROFIT_PCT", 0.012),
+        trailing_stop_pct=_env_float("TRAILING_STOP_PCT", 0.004),
     )
 

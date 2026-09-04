@@ -1,1244 +1,904 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ETF Trade Bot — Terminal</title>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <style>
-    :root {
-      --bg: #07090d;
-      --bg-2: #0b0f16;
-      --panel: #0f1520;
-      --panel-2: #131b29;
-      --border: #1e2a3d;
-      --border-strong: #2a3b55;
-      --text: #e6edf7;
-      --muted: #6e7f99;
-      --muted-2: #8a9bb4;
-      --accent: #36d1ff;
-      --accent-dim: #1a6f8a;
-      --green: #00e08a;
-      --green-dim: #0a5a3e;
-      --red: #ff4d5e;
-      --red-dim: #5a1420;
-      --amber: #ffb020;
-      --amber-dim: #5a3f0a;
-      --violet: #b37dff;
-      --shadow: 0 1px 0 rgba(255,255,255,0.03), 0 8px 24px rgba(0,0,0,0.4);
-      --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-      --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; }
-    body {
-      font-family: var(--font-ui);
-      background:
-        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(54, 209, 255, 0.08), transparent 60%),
-        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(179, 125, 255, 0.05), transparent 60%),
-        var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    /* -------- Top header bar -------- */
-    header.topbar {
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(12px);
-      background: rgba(7, 9, 13, 0.85);
-      border-bottom: 1px solid var(--border);
-      padding: 0.65rem 1.25rem;
-      display: flex;
-      align-items: center;
-      gap: 1.5rem;
-      flex-wrap: wrap;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      font-weight: 700;
-      font-size: 0.95rem;
-      letter-spacing: 0.02em;
-    }
-    .brand .logo {
-      width: 26px; height: 26px;
-      border-radius: 6px;
-      background: linear-gradient(135deg, var(--accent), var(--violet));
-      display: grid;
-      place-items: center;
-      font-family: var(--font-mono);
-      font-weight: 700;
-      color: #07090d;
-      font-size: 0.75rem;
-      box-shadow: 0 0 18px rgba(54, 209, 255, 0.35);
-    }
-    .brand small { color: var(--muted); font-weight: 500; margin-left: 0.35rem; font-size: 0.72rem; }
-
-    .sep { width: 1px; background: var(--border); align-self: stretch; margin: 0.15rem 0; }
-
-    .topmeta {
-      display: flex;
-      align-items: center;
-      gap: 1.1rem;
-      flex: 1;
-      font-family: var(--font-mono);
-      font-size: 0.78rem;
-      flex-wrap: wrap;
-    }
-    .topmeta .item { display: flex; flex-direction: column; gap: 0.1rem; }
-    .topmeta .k { color: var(--muted); text-transform: uppercase; font-size: 0.62rem; letter-spacing: 0.08em; }
-    .topmeta .v { color: var(--text); font-weight: 600; font-size: 0.85rem; letter-spacing: 0.02em; }
-
-    .market-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-      padding: 0.35rem 0.7rem;
-      border-radius: 999px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      font-family: var(--font-mono);
-      font-size: 0.72rem;
-      font-weight: 600;
-    }
-    .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--muted);
-      box-shadow: 0 0 0 0 rgba(0,0,0,0);
-    }
-    .dot.live { background: var(--green); box-shadow: 0 0 0 3px rgba(0, 224, 138, 0.18); animation: pulse 2s infinite; }
-    .dot.stop { background: var(--red); box-shadow: 0 0 0 3px rgba(255, 77, 94, 0.15); }
-    .dot.warn { background: var(--amber); box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.15); }
-    @keyframes pulse {
-      0%   { box-shadow: 0 0 0 0 rgba(0, 224, 138, 0.4); }
-      70%  { box-shadow: 0 0 0 6px rgba(0, 224, 138, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(0, 224, 138, 0); }
-    }
-
-    .topactions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-    button.btn {
-      background: var(--panel);
-      color: var(--text);
-      border: 1px solid var(--border-strong);
-      padding: 0.42rem 0.85rem;
-      border-radius: 6px;
-      font-weight: 600;
-      font-size: 0.78rem;
-      font-family: var(--font-ui);
-      cursor: pointer;
-      transition: background 0.12s, border-color 0.12s, transform 0.05s;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-    button.btn:hover { background: #18222f; border-color: #3a5070; }
-    button.btn:active { transform: translateY(1px); }
-    button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-    button.btn.primary {
-      background: linear-gradient(180deg, #1a7490, #0f556b);
-      border-color: var(--accent-dim);
-      color: #e6faff;
-    }
-    button.btn.primary:hover { filter: brightness(1.12); }
-    button.btn.success {
-      background: linear-gradient(180deg, #0e6b46, #074a30);
-      border-color: #0a7f53;
-      color: #e4fff2;
-    }
-    button.btn.danger {
-      background: linear-gradient(180deg, #7a1e2a, #4a101a);
-      border-color: #8a2a36;
-      color: #ffe6e8;
-    }
-    button.btn.danger:hover { filter: brightness(1.15); }
-
-    /* -------- Layout -------- */
-    main { padding: 1.1rem 1.25rem 3rem; max-width: 1800px; margin: 0 auto; }
-
-    .msg-line {
-      min-height: 1.25rem;
-      font-size: 0.78rem;
-      font-family: var(--font-mono);
-      color: var(--muted-2);
-      margin: 0 0 0.8rem;
-    }
-    .msg-line.err { color: var(--red); }
-    .msg-line.ok  { color: var(--green); }
-
-    /* -------- Panels -------- */
-    .panel {
-      background: linear-gradient(180deg, var(--panel), var(--bg-2));
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }
-    .panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0.7rem 0.95rem;
-      border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.01);
-    }
-    .panel-header h2 {
-      margin: 0;
-      font-size: 0.72rem;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--muted-2);
-      font-weight: 700;
-      font-family: var(--font-mono);
-    }
-    .panel-header .tag {
-      font-family: var(--font-mono);
-      font-size: 0.7rem;
-      color: var(--muted);
-    }
-    .panel-body { padding: 0.95rem; }
-
-    /* -------- Hero: account metrics -------- */
-    .hero-grid {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 0.75rem;
-      margin-bottom: 0.95rem;
-    }
-    @media (max-width: 1400px) { .hero-grid { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 720px)  { .hero-grid { grid-template-columns: repeat(2, 1fr); } }
-
-    .metric {
-      background: linear-gradient(180deg, var(--panel), var(--bg-2));
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 0.85rem 1rem;
-      position: relative;
-      overflow: hidden;
-    }
-    .metric::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(180deg, rgba(54, 209, 255, 0.05), transparent 50%);
-      pointer-events: none;
-    }
-    .metric .k {
-      font-size: 0.64rem;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--muted);
-      font-weight: 600;
-      font-family: var(--font-mono);
-    }
-    .metric .v {
-      font-size: 1.55rem;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      margin-top: 0.35rem;
-      letter-spacing: -0.01em;
-      line-height: 1.1;
-    }
-    .metric .sub {
-      margin-top: 0.2rem;
-      font-size: 0.72rem;
-      color: var(--muted);
-      font-family: var(--font-mono);
-    }
-    .metric.accent .k { color: var(--accent); }
-    .metric.wide { grid-column: span 2; }
-
-    .up   { color: var(--green); }
-    .down { color: var(--red);   }
-    .zero { color: var(--muted); }
-    .chg  { font-family: var(--font-mono); font-weight: 600; }
-
-    /* -------- Two-column content -------- */
-    .two-col {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 0.95rem;
-      margin-bottom: 0.95rem;
-    }
-    @media (max-width: 1200px) { .two-col { grid-template-columns: 1fr; } }
-
-    /* -------- Positions table -------- */
-    table.ttable {
-      width: 100%;
-      border-collapse: collapse;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-    }
-    table.ttable thead th {
-      position: sticky;
-      top: 0;
-      background: var(--panel-2);
-      color: var(--muted-2);
-      text-align: left;
-      font-weight: 600;
-      font-size: 0.66rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 0.55rem 0.75rem;
-      border-bottom: 1px solid var(--border-strong);
-    }
-    table.ttable tbody td {
-      padding: 0.6rem 0.75rem;
-      border-bottom: 1px solid rgba(30, 42, 61, 0.6);
-      white-space: nowrap;
-    }
-    table.ttable tbody tr:hover { background: rgba(54, 209, 255, 0.04); }
-    table.ttable .num { text-align: right; }
-    .sym-tag {
-      display: inline-block;
-      background: rgba(54, 209, 255, 0.1);
-      color: var(--accent);
-      border: 1px solid rgba(54, 209, 255, 0.25);
-      padding: 0.1rem 0.45rem;
-      border-radius: 4px;
-      font-weight: 600;
-      font-size: 0.75rem;
-    }
-    .empty-hint {
-      padding: 1.5rem;
-      text-align: center;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-    }
-
-    /* -------- Bot state card (right rail) -------- */
-    .kv-list { display: flex; flex-direction: column; gap: 0.5rem; }
-    .kv-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 0.6rem;
-      padding: 0.55rem 0.7rem;
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.015);
-      font-family: var(--font-mono);
-      font-size: 0.78rem;
-    }
-    .kv-row .k {
-      color: var(--muted);
-      font-size: 0.68rem;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-    }
-    .kv-row .v { font-weight: 600; color: var(--text); text-align: right; }
-
-    .state-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 0.2rem 0.55rem;
-      border-radius: 4px;
-      font-family: var(--font-mono);
-      font-size: 0.7rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      border: 1px solid;
-    }
-    .chip-flat  { color: var(--muted-2); border-color: var(--border-strong); background: rgba(255,255,255,0.02); }
-    .chip-pend  { color: var(--amber);   border-color: var(--amber-dim);     background: rgba(255, 176, 32, 0.08); }
-    .chip-in    { color: var(--green);   border-color: var(--green-dim);     background: rgba(0, 224, 138, 0.08); }
-    .chip-exit  { color: var(--accent);  border-color: var(--accent-dim);    background: rgba(54, 209, 255, 0.08); }
-    .chip-halt  { color: var(--red);     border-color: var(--red-dim);       background: rgba(255, 77, 94, 0.08); }
-    .chip-allow { color: var(--green);   border-color: var(--green-dim);     background: rgba(0, 224, 138, 0.06); }
-    .chip-paper { color: var(--accent);  border-color: var(--accent-dim);    background: rgba(54, 209, 255, 0.08); }
-    .chip-live  { color: var(--red);     border-color: var(--red-dim);       background: rgba(255, 77, 94, 0.08); }
-
-    /* -------- Session stats row -------- */
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 0.75rem;
-    }
-    @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 600px)  { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
-
-    .stat {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.7rem 0.85rem;
-    }
-    .stat .k {
-      font-size: 0.6rem;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-weight: 600;
-    }
-    .stat .v {
-      font-size: 1.2rem;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      margin-top: 0.25rem;
-      letter-spacing: -0.01em;
-    }
-
-    /* -------- Trades table -------- */
-    .scroll-x { overflow-x: auto; }
-
-    .exit-tag {
-      display: inline-block;
-      font-family: var(--font-mono);
-      font-size: 0.68rem;
-      padding: 0.1rem 0.45rem;
-      border-radius: 4px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      border: 1px solid;
-    }
-    .exit-stop { color: var(--red);    border-color: var(--red-dim);    background: rgba(255, 77, 94, 0.08); }
-    .exit-mkt  { color: var(--accent); border-color: var(--accent-dim); background: rgba(54, 209, 255, 0.08); }
-
-    /* -------- Ticker tape -------- */
-    .ticker {
-      overflow: hidden;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--panel);
-      margin-bottom: 0.95rem;
-      position: relative;
-    }
-    .ticker::before, .ticker::after {
-      content: "";
-      position: absolute; top: 0; bottom: 0; width: 40px;
-      pointer-events: none; z-index: 2;
-    }
-    .ticker::before { left: 0;  background: linear-gradient(90deg, var(--panel), transparent); }
-    .ticker::after  { right: 0; background: linear-gradient(-90deg, var(--panel), transparent); }
-    .ticker-track {
-      display: flex;
-      gap: 2.25rem;
-      padding: 0.6rem 1rem;
-      animation: slide 45s linear infinite;
-      white-space: nowrap;
-      font-family: var(--font-mono);
-      font-size: 0.78rem;
-      width: max-content;
-    }
-    @keyframes slide {
-      from { transform: translateX(0); }
-      to   { transform: translateX(-50%); }
-    }
-    .ticker-item { display: inline-flex; align-items: center; gap: 0.45rem; }
-    .ticker-sym  { color: var(--accent); font-weight: 600; }
-
-    /* -------- Footer -------- */
-    footer {
-      margin-top: 1.5rem;
-      padding: 0.95rem 0;
-      font-family: var(--font-mono);
-      font-size: 0.7rem;
-      color: var(--muted);
-      border-top: 1px solid var(--border);
-      text-align: center;
-    }
-    footer code { color: var(--accent); background: none; }
-
-    /* Utility */
-    .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-    .flash { animation: flash 0.6s ease-out; }
-    @keyframes flash {
-      0%   { background: rgba(54, 209, 255, 0.25); }
-      100% { background: transparent; }
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VECTOR/DESK — Trade Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;background:#06080b;}
+  ::-webkit-scrollbar{height:9px;width:9px;}
+  ::-webkit-scrollbar-thumb{background:#222732;border-radius:6px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  @keyframes dotPulse{0%{transform:scale(1);opacity:.75}55%{transform:scale(2.6);opacity:0}100%{transform:scale(2.6);opacity:0}}
+  @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @keyframes flashUp{0%{box-shadow:inset 0 0 0 60px rgba(25,224,143,.22)}100%{box-shadow:inset 0 0 0 60px rgba(25,224,143,0)}}
+  @keyframes flashDown{0%{box-shadow:inset 0 0 0 60px rgba(255,80,102,.22)}100%{box-shadow:inset 0 0 0 60px rgba(255,80,102,0)}}
+  @keyframes hb{0%,100%{opacity:.55}50%{opacity:1}}
+  button{cursor:pointer;transition:filter .12s,background .12s;}
+  .cfg-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid #14181f;}
+  .cfg-label{font:500 11.5px 'Space Grotesk';color:#8b93a4;flex:1;min-width:0;}
+  .cfg-unit{font:500 10px 'Space Grotesk';color:#5a6273;white-space:nowrap;}
+  .cfg-input{background:#06080b;border:1px solid #1c212c;border-radius:6px;color:#cfd5e1;font:700 12px 'JetBrains Mono',monospace;padding:5px 7px;outline:none;transition:border-color .15s;}
+  .cfg-input:focus{border-color:#4d8dff;}
+  .cfg-input::-webkit-inner-spin-button,.cfg-input::-webkit-outer-spin-button{opacity:.4;}
+  #btnRefresh:hover{background:#171c25!important;border-color:#2f3744!important;}
+  #btnStart:hover,#btnStop:hover,#btnResume:hover{filter:brightness(1.1);}
+</style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div class="logo">T</div>
-      <span>ETF TRADE BOT</span>
-      <small>// alpaca terminal</small>
-    </div>
-    <div class="sep"></div>
-    <div class="topmeta">
-      <div class="item">
-        <span class="k">NYSE</span>
-        <span class="v"><span class="market-pill"><span id="mkt-dot" class="dot"></span><span id="mkt-label">--</span></span></span>
-      </div>
-      <div class="item">
-        <span class="k">Bot Process</span>
-        <span class="v" id="bot-process"><span class="market-pill"><span id="bot-dot" class="dot"></span><span id="bot-label">--</span></span></span>
-      </div>
-      <div class="item">
-        <span class="k">Mode</span>
-        <span class="v" id="mode-chip">—</span>
-      </div>
-      <div class="item">
-        <span class="k">ET Time</span>
-        <span class="v" id="et-clock">--:--:--</span>
-      </div>
-      <div class="item">
-        <span class="k">To Close</span>
-        <span class="v" id="to-close">—</span>
-      </div>
-      <div class="item">
-        <span class="k">Last Sync</span>
-        <span class="v" id="last-sync">—</span>
+<div style="min-height:100vh;color:#e7eaf0;font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased;background-color:#06080b;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px),radial-gradient(900px 520px at 86% -12%,rgba(77,141,255,.08),transparent 60%);background-size:46px 46px,46px 46px,100% 100%;">
+
+  <!-- TOP BAR -->
+  <header style="position:sticky;top:0;z-index:60;display:flex;align-items:center;flex-wrap:wrap;gap:12px 16px;padding:11px 20px;background:rgba(6,8,11,.78);backdrop-filter:blur(14px);border-bottom:1px solid #161a22;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="width:11px;height:26px;border-radius:2px;background:linear-gradient(180deg,#4d8dff,#19e08f);box-shadow:0 0 16px rgba(77,141,255,.4);"></div>
+      <div style="line-height:1;">
+        <div style="font-weight:700;font-size:15px;letter-spacing:.02em;">VECTOR<span style="color:#4d8dff;">/</span>DESK</div>
+        <div style="font:500 8.5px 'JetBrains Mono',monospace;letter-spacing:.26em;color:#5a6273;margin-top:3px;">AUTONOMOUS EXEC</div>
       </div>
     </div>
-    <div class="topactions">
-      <button type="button" class="btn" id="btn-refresh">Refresh</button>
-      <button type="button" class="btn success" id="btn-start">Start</button>
-      <button type="button" class="btn primary" id="btn-resume">Resume entries</button>
-      <button type="button" class="btn danger"  id="btn-stop">Stop &amp; flatten</button>
+
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-left:14px;margin-left:2px;border-left:1px solid #1a1f29;">
+      <div style="display:flex;align-items:center;gap:8px;background:#0b0e13;border:1px solid #1c212c;border-radius:7px;padding:6px 11px;">
+        <span style="position:relative;display:inline-flex;width:8px;height:8px;">
+          <span id="mktPulse" style="position:absolute;inset:0;border-radius:50%;background:#ff5066;animation:dotPulse 2.1s ease-out infinite;"></span>
+          <span id="mktCore" style="position:relative;width:8px;height:8px;border-radius:50%;background:#ff5066;"></span>
+        </span>
+        <span style="font:600 10.5px 'Space Grotesk';letter-spacing:.05em;color:#8b93a4;">NYSE</span>
+        <span id="mktText" style="font:700 10.5px 'JetBrains Mono',monospace;letter-spacing:.05em;color:#ff5066;">--</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;background:#0b0e13;border:1px solid #1c212c;border-radius:7px;padding:6px 11px;">
+        <span style="position:relative;display:inline-flex;width:8px;height:8px;">
+          <span id="botPulse" style="position:absolute;inset:0;border-radius:50%;background:#ff5066;animation:dotPulse 1.5s ease-out infinite;"></span>
+          <span id="botCore" style="position:relative;width:8px;height:8px;border-radius:50%;background:#ff5066;"></span>
+        </span>
+        <span style="font:600 10.5px 'Space Grotesk';letter-spacing:.05em;color:#8b93a4;">BOT</span>
+        <span id="botText" style="font:700 10.5px 'JetBrains Mono',monospace;letter-spacing:.05em;color:#ff5066;">--</span>
+      </div>
+      <div id="modeChip" style="display:flex;align-items:center;border-radius:7px;padding:6px 11px;background:rgba(77,141,255,.1);border:1px solid rgba(77,141,255,.4);">
+        <span id="modeText" style="font:700 10.5px 'JetBrains Mono',monospace;letter-spacing:.12em;color:#4d8dff;">--</span>
+      </div>
+      <div id="offlineBadge" style="display:none;align-items:center;border-radius:7px;padding:6px 10px;background:rgba(255,176,32,.1);border:1px solid rgba(255,176,32,.4);">
+        <span style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.08em;color:#ffb020;">DEMO DATA</span>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:20px;margin-left:auto;">
+      <div style="text-align:right;line-height:1;">
+        <div style="font:500 8.5px 'Space Grotesk';letter-spacing:.16em;text-transform:uppercase;color:#5a6273;margin-bottom:5px;">ET</div>
+        <div id="etClock" style="font:700 17px 'JetBrains Mono',monospace;letter-spacing:.01em;">--:--:--</div>
+      </div>
+      <div style="text-align:right;line-height:1;">
+        <div style="font:500 8.5px 'Space Grotesk';letter-spacing:.16em;text-transform:uppercase;color:#5a6273;margin-bottom:5px;">Session</div>
+        <div id="sessionCountdown" style="font:600 13px 'JetBrains Mono',monospace;color:#aeb6c6;">--</div>
+      </div>
+      <div style="text-align:right;line-height:1;">
+        <div style="font:500 8.5px 'Space Grotesk';letter-spacing:.16em;text-transform:uppercase;color:#5a6273;margin-bottom:5px;">Synced</div>
+        <div id="lastSync" style="font:600 13px 'JetBrains Mono',monospace;color:#8b93a4;">--</div>
+      </div>
     </div>
   </header>
 
-  <main>
-    <div id="action-msg" class="msg-line"></div>
+  <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:18px;max-width:1640px;margin:0 auto;padding:20px;">
 
-    <!-- Hero metrics -->
-    <div class="hero-grid" id="hero-grid">
-      <div class="metric accent">
-        <div class="k">Equity</div>
-        <div class="v" id="m-equity">—</div>
-        <div class="sub" id="m-equity-sub">vs prev close —</div>
-      </div>
-      <div class="metric">
-        <div class="k">Day P&amp;L (equity)</div>
-        <div class="v" id="m-daypnl">—</div>
-        <div class="sub" id="m-daypnl-sub">intraday mark-to-market</div>
-      </div>
-      <div class="metric">
-        <div class="k">Realized (bot)</div>
-        <div class="v" id="m-realized">—</div>
-        <div class="sub" id="m-realized-sub">vs kill-switch —</div>
-      </div>
-      <div class="metric">
-        <div class="k">Unrealized</div>
-        <div class="v" id="m-unreal">—</div>
-        <div class="sub" id="m-unreal-sub">open positions</div>
-      </div>
-      <div class="metric">
-        <div class="k">Buying Power</div>
-        <div class="v" id="m-bp">—</div>
-        <div class="sub" id="m-cash-sub">cash —</div>
-      </div>
-      <div class="metric">
-        <div class="k">Exposure</div>
-        <div class="v" id="m-expo">—</div>
-        <div class="sub" id="m-expo-sub">long MV / cap —</div>
-      </div>
-    </div>
+    <!-- LEFT RAIL -->
+    <aside style="position:sticky;top:78px;flex:1 1 268px;max-width:300px;min-width:248px;display:flex;flex-direction:column;gap:14px;">
 
-    <!-- Ticker tape of watchlist / positions -->
-    <div class="ticker" id="ticker-panel" style="display:none;">
-      <div class="ticker-track" id="ticker-track"></div>
-    </div>
-
-    <!-- Positions + Bot state -->
-    <div class="two-col">
-      <section class="panel" id="pos-panel">
-        <div class="panel-header">
-          <h2 id="pos-panel-title">Open Positions</h2>
-          <span class="tag" id="pos-count-tag">0 open</span>
+      <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;padding:16px;">
+        <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.16em;text-transform:uppercase;color:#5a6273;">Engine State</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+          <span id="stDot" style="width:10px;height:10px;border-radius:50%;background:#19e08f;box-shadow:0 0 12px #19e08f;animation:hb 1.8s ease-in-out infinite;flex:none;"></span>
+          <span id="stChip" style="font:700 19px 'Space Grotesk';letter-spacing:-.01em;color:#19e08f;">--</span>
         </div>
-        <div class="scroll-x" id="pos-table-wrap">
-          <table class="ttable" id="pos-table">
+        <div style="display:flex;gap:8px;margin-top:14px;">
+          <div style="flex:1;background:#06080b;border:1px solid #181d26;border-radius:9px;padding:9px 10px;">
+            <div style="font:500 8.5px 'Space Grotesk';letter-spacing:.1em;text-transform:uppercase;color:#5a6273;">Entries</div>
+            <div id="entriesText" style="font:700 13px 'JetBrains Mono',monospace;color:#19e08f;margin-top:5px;">--</div>
+          </div>
+          <div style="flex:1;background:#06080b;border:1px solid #181d26;border-radius:9px;padding:9px 10px;">
+            <div style="font:500 8.5px 'Space Grotesk';letter-spacing:.1em;text-transform:uppercase;color:#5a6273;">Slots</div>
+            <div id="slotsText" style="font:700 13px 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:5px;">--</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:8px;">
+          <button id="btnRefresh" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;font:600 12px 'Space Grotesk';color:#cfd5e1;background:#11151c;border:1px solid #232a35;border-radius:10px;padding:11px 12px;">
+            <span style="font-size:13px;">&#8635;</span> Refresh
+          </button>
+          <button id="btnStart" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;font:600 12px 'Space Grotesk';color:#04140c;background:#19e08f;border:1px solid #19e08f;border-radius:10px;padding:11px 12px;">
+            <span style="font-size:10px;">&#9654;</span> Start
+          </button>
+        </div>
+        <button id="btnResume" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 12px 'Space Grotesk';color:#ffb020;background:rgba(255,176,32,.1);border:1px solid rgba(255,176,32,.45);border-radius:10px;padding:11px 12px;">
+          <span style="font-size:13px;">&#8631;</span> Resume Entries
+        </button>
+        <button id="btnStop" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 12px 'Space Grotesk';color:#fff;background:#ff5066;border:1px solid #ff5066;border-radius:10px;padding:11px 12px;">
+          <span style="font-size:10px;">&#9632;</span> Stop &amp; Flatten
+        </button>
+        <div id="actionMsg" style="min-height:1.2em;font:500 11px 'JetBrains Mono',monospace;color:#5a6273;text-align:center;padding:2px 0;"></div>
+      </div>
+
+      <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;padding:6px 16px 14px;">
+        <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.16em;text-transform:uppercase;color:#5a6273;padding:13px 0 4px;">Risk &amp; Strategy</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid #14181f;">
+          <span style="font:500 12px 'Space Grotesk';color:#8b93a4;">Score threshold</span>
+          <span id="rScore" style="font:700 12px 'JetBrains Mono',monospace;color:#cfd5e1;">--</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid #14181f;">
+          <span style="font:500 12px 'Space Grotesk';color:#8b93a4;">Momentum min</span>
+          <span id="rMom" style="font:700 12px 'JetBrains Mono',monospace;color:#cfd5e1;">--</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid #14181f;">
+          <span style="font:500 12px 'Space Grotesk';color:#8b93a4;">Max daily loss</span>
+          <span id="rMaxLoss" style="font:700 12px 'JetBrains Mono',monospace;color:#ff5066;">--</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid #14181f;">
+          <span style="font:500 12px 'Space Grotesk';color:#8b93a4;">Stop / Take-profit</span>
+          <span id="rStopTp" style="font:700 12px 'JetBrains Mono',monospace;color:#cfd5e1;">-- / --</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid #14181f;">
+          <span style="font:500 12px 'Space Grotesk';color:#8b93a4;">Trailing stop</span>
+          <span id="rTrail" style="font:700 12px 'JetBrains Mono',monospace;color:#cfd5e1;">--</span>
+        </div>
+        <div style="padding:12px 0 2px;border-top:1px solid #14181f;">
+          <div style="font:500 12px 'Space Grotesk';color:#8b93a4;margin-bottom:10px;">Symbol universe</div>
+          <div id="universe" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+        </div>
+      </div>
+      <!-- CONFIG EDITOR -->
+      <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;overflow:hidden;">
+        <button id="cfgToggle" onclick="toggleCfg()" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:none;border:none;cursor:pointer;">
+          <span style="font:500 9.5px 'Space Grotesk';letter-spacing:.16em;text-transform:uppercase;color:#5a6273;">Edit Config</span>
+          <span id="cfgArrow" style="font-size:10px;color:#5a6273;transition:transform .2s;">&#9660;</span>
+        </button>
+        <div id="cfgPanel" style="display:none;padding:0 16px 14px;border-top:1px solid #14181f;">
+
+          <div style="font:500 9px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#3f4655;padding:10px 0 6px;">Positions &amp; Capital</div>
+
+          <div class="cfg-row">
+            <label class="cfg-label">Max open trades</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_MAX_OPEN_POSITIONS" type="number" min="1" max="20" step="1" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">#</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Max $ in play</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_MAX_PORTFOLIO_NOTIONAL_USD" type="number" min="1" step="100" class="cfg-input" style="width:90px;">
+              <span class="cfg-unit">USD</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Min avg volume</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_MIN_AVG_VOLUME" type="number" min="0" step="100" class="cfg-input" style="width:90px;">
+              <span class="cfg-unit">shares</span>
+            </div>
+          </div>
+
+          <div style="font:500 9px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#3f4655;padding:10px 0 6px;border-top:1px solid #14181f;">Timing</div>
+
+          <div class="cfg-row">
+            <label class="cfg-label">Entry cooldown</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_ENTRY_COOLDOWN_SEC" type="number" min="0" step="10" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">sec</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Post-loss cooldown</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_POST_LOSS_EXTRA_COOLDOWN_SEC" type="number" min="0" step="10" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">sec</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Opening range delay</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_MARKET_OPEN_DELAY_MINUTES" type="number" min="0" step="1" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">min</span>
+            </div>
+          </div>
+
+          <div style="font:500 9px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#3f4655;padding:10px 0 6px;border-top:1px solid #14181f;">Risk</div>
+
+          <div class="cfg-row">
+            <label class="cfg-label">Daily loss limit</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font:600 12px 'JetBrains Mono',monospace;color:#ff5066;">-$</span>
+              <input id="cfg_MAX_DAILY_REALIZED_LOSS" type="number" min="0.01" step="1" class="cfg-input" style="width:70px;" placeholder="20">
+              <span class="cfg-unit">USD</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Stop loss</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_STOP_LOSS_PCT" type="number" min="0.01" max="20" step="0.01" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">%</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Take profit</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_TAKE_PROFIT_PCT" type="number" min="0.01" max="50" step="0.01" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">%</span>
+            </div>
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">Trailing stop</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="cfg_TRAILING_STOP_PCT" type="number" min="0.01" max="20" step="0.01" class="cfg-input" style="width:70px;">
+              <span class="cfg-unit">%</span>
+            </div>
+          </div>
+
+          <button id="cfgSaveBtn" onclick="saveConfig()" style="margin-top:14px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;font:600 12px 'Space Grotesk';color:#e7eaf0;background:#4d8dff;border:1px solid #4d8dff;border-radius:10px;padding:10px 12px;cursor:pointer;">
+            Save Changes
+          </button>
+          <div id="cfgMsg" style="min-height:1.1em;font:500 11px 'JetBrains Mono',monospace;color:#5a6273;text-align:center;margin-top:7px;"></div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- MAIN -->
+    <main style="flex:3 1 660px;min-width:0;display:flex;flex-direction:column;gap:18px;">
+
+      <!-- HERO EQUITY + CHART -->
+      <section style="background:linear-gradient(180deg,#0c1017,#0a0d13);border:1px solid #1a1f29;border-radius:16px;overflow:hidden;">
+        <div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;padding:20px 22px 14px;">
+          <div>
+            <div style="font:500 10px 'Space Grotesk';letter-spacing:.18em;text-transform:uppercase;color:#5a6273;">Account Equity</div>
+            <div id="equityText" data-mk="equity" style="font:700 52px/1 'Space Grotesk';letter-spacing:-.02em;color:#f3f6fa;margin-top:10px;border-radius:8px;">--</div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+              <span id="dayPnlBadge" data-mk="dayPnl" style="display:inline-flex;align-items:center;gap:6px;font:700 15px 'JetBrains Mono',monospace;color:#cfd5e1;background:rgba(255,255,255,.04);border:1px solid #cfd5e1;border-radius:8px;padding:5px 10px;">-- --</span>
+              <span id="dayPnlPct" style="font:600 14px 'JetBrains Mono',monospace;color:#cfd5e1;">--</span>
+              <span style="font:500 12px 'Space Grotesk';color:#5a6273;">today</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:22px;">
+            <div style="text-align:right;"><div style="font:500 9px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#5a6273;margin-bottom:6px;">Open</div><div id="chartOpen" style="font:600 14px 'JetBrains Mono',monospace;color:#aeb6c6;">--</div></div>
+            <div style="text-align:right;"><div style="font:500 9px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#5a6273;margin-bottom:6px;">High</div><div id="chartHigh" style="font:600 14px 'JetBrains Mono',monospace;color:#19e08f;">--</div></div>
+            <div style="text-align:right;"><div style="font:500 9px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#5a6273;margin-bottom:6px;">Low</div><div id="chartLow" style="font:600 14px 'JetBrains Mono',monospace;color:#ff5066;">--</div></div>
+          </div>
+        </div>
+        <div style="position:relative;">
+          <svg viewBox="0 0 1000 260" preserveAspectRatio="none" style="width:100%;height:212px;display:block;">
+            <defs>
+              <linearGradient id="gUp" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#19e08f" stop-opacity="0.30"></stop>
+                <stop offset="1" stop-color="#19e08f" stop-opacity="0"></stop>
+              </linearGradient>
+              <linearGradient id="gDn" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#ff5066" stop-opacity="0.30"></stop>
+                <stop offset="1" stop-color="#ff5066" stop-opacity="0"></stop>
+              </linearGradient>
+            </defs>
+            <line x1="0" x2="1000" y1="65" y2="65" stroke="#11151c" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+            <line x1="0" x2="1000" y1="130" y2="130" stroke="#11151c" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+            <line x1="0" x2="1000" y1="195" y2="195" stroke="#11151c" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+            <line id="svgOpenLine" x1="0" x2="1000" y1="130" y2="130" stroke="#39414f" stroke-width="1" stroke-dasharray="3 5" vector-effect="non-scaling-stroke"></line>
+            <path id="svgArea" d="" fill="url(#gUp)"></path>
+            <path id="svgLine" d="" fill="none" stroke="#19e08f" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>
+          </svg>
+          <div id="chartDot" style="position:absolute;top:50%;right:0;transform:translate(-3px,-50%);">
+            <span style="position:relative;display:inline-flex;width:9px;height:9px;">
+              <span id="dotPulse" style="position:absolute;inset:0;border-radius:50%;background:#19e08f;animation:dotPulse 1.7s ease-out infinite;"></span>
+              <span id="dotCore" style="position:relative;width:9px;height:9px;border-radius:50%;background:#19e08f;box-shadow:0 0 10px #19e08f;"></span>
+            </span>
+          </div>
+          <div style="position:absolute;left:16px;bottom:10px;font:500 9.5px 'JetBrains Mono',monospace;letter-spacing:.1em;color:#454d5c;">INTRADAY · EQUITY CURVE · 09:30 ET → NOW</div>
+        </div>
+      </section>
+
+      <!-- METRIC STRIP -->
+      <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;">
+        <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:13px;padding:15px 16px;">
+          <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.13em;text-transform:uppercase;color:#5a6273;">Realized P&amp;L <span style="color:#3f4655;">· bot</span></div>
+          <div id="realizedPnl" data-mk="realizedPnl" style="font:700 25px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:11px;border-radius:6px;">--</div>
+        </div>
+        <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:13px;padding:15px 16px;">
+          <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.13em;text-transform:uppercase;color:#5a6273;">Unrealized P&amp;L</div>
+          <div id="unrealizedPnl" data-mk="unrealizedPnl" style="font:700 25px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:11px;border-radius:6px;">--</div>
+        </div>
+        <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:13px;padding:15px 16px;">
+          <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.13em;text-transform:uppercase;color:#5a6273;">Buying Power</div>
+          <div id="buyingPower" data-mk="buyingPower" style="font:700 25px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:11px;border-radius:6px;">--</div>
+        </div>
+        <div style="background:#0b0e13;border:1px solid #1a1f29;border-radius:13px;padding:15px 16px;">
+          <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.13em;text-transform:uppercase;color:#5a6273;">Exposure</div>
+          <div id="exposure" data-mk="exposure" style="font:700 25px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:11px;border-radius:6px;">--</div>
+          <div id="exposurePct" style="font:500 11px 'JetBrains Mono',monospace;color:#5a6273;margin-top:6px;">-- of equity</div>
+        </div>
+      </section>
+
+      <!-- TICKER -->
+      <section id="tickerSection" style="display:none;background:#0a0d13;border:1px solid #161a22;border-radius:11px;overflow:hidden;">
+        <div style="display:flex;align-items:stretch;">
+          <div style="display:flex;align-items:center;gap:7px;padding:0 15px;background:#0d1117;border-right:1px solid #161a22;flex:none;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#19e08f;animation:hb 1.4s ease-in-out infinite;"></span>
+            <span style="font:600 9.5px 'Space Grotesk';letter-spacing:.12em;color:#5a6273;">LIVE</span>
+          </div>
+          <div style="overflow:hidden;flex:1;">
+            <div id="tickerTrack" style="display:flex;width:max-content;animation:marquee 34s linear infinite;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- POSITIONS / DIAGNOSTICS -->
+      <section style="background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;overflow:hidden;">
+        <div id="posView">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #161a22;">
+            <span style="font:600 13.5px 'Space Grotesk';letter-spacing:.01em;color:#e7eaf0;">Open Positions</span>
+            <span id="posSlots" style="font:500 11px 'JetBrains Mono',monospace;color:#5a6273;">0 / 0</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;min-width:740px;">
+              <thead>
+                <tr style="text-align:right;">
+                  <th style="text-align:left;font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 18px;">Symbol</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Qty</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Avg Entry</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Last</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Mkt Value</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Unreal. P&amp;L</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Unreal. %</th>
+                  <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 18px;">Day %</th>
+                </tr>
+              </thead>
+              <tbody id="posBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="diagView" style="display:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #161a22;">
+            <span style="font:600 13.5px 'Space Grotesk';letter-spacing:.01em;color:#e7eaf0;">No-Trade Diagnostics</span>
+            <span style="font:500 11px 'JetBrains Mono',monospace;color:#ffb020;">FLAT · 0 OPEN</span>
+          </div>
+          <div id="diagList" style="padding:6px 18px 16px;"></div>
+        </div>
+      </section>
+
+      <!-- SESSION STATS + P&L BY SYMBOL -->
+      <section style="display:flex;flex-wrap:wrap;gap:18px;align-items:stretch;">
+        <div style="flex:2 1 380px;min-width:0;background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;padding:16px 18px;">
+          <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#5a6273;margin-bottom:14px;">Session Stats</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px 14px;">
+            <div><div style="font:500 9.5px 'Space Grotesk';letter-spacing:.07em;text-transform:uppercase;color:#5a6273;">Trades Today</div><div id="stTradesToday" style="font:700 23px/1 'JetBrains Mono',monospace;color:#e7eaf0;margin-top:8px;">--</div></div>
+            <div><div style="font:500 9.5px 'Space Grotesk';letter-spacing:.07em;text-transform:uppercase;color:#5a6273;">P&amp;L Today</div><div id="stPnlToday" style="font:700 23px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:8px;">--</div></div>
+            <div><div style="font:500 9.5px 'Space Grotesk';letter-spacing:.07em;text-transform:uppercase;color:#5a6273;">Win Rate</div><div id="stWinRate" style="font:700 23px/1 'JetBrains Mono',monospace;color:#4d8dff;margin-top:8px;">--</div></div>
+            <div><div style="font:500 9.5px 'Space Grotesk';letter-spacing:.07em;text-transform:uppercase;color:#5a6273;">Total Trades</div><div id="stTotalTrades" style="font:700 23px/1 'JetBrains Mono',monospace;color:#e7eaf0;margin-top:8px;">--</div></div>
+            <div><div style="font:500 9.5px 'Space Grotesk';letter-spacing:.07em;text-transform:uppercase;color:#5a6273;">Total P&amp;L</div><div id="stTotalPnl" style="font:700 23px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:8px;">--</div></div>
+            <div><div style="font:500 9.5px 'Space Grotesk';letter-spacing:.07em;text-transform:uppercase;color:#5a6273;">Avg / Trade</div><div id="stAvgTrade" style="font:700 23px/1 'JetBrains Mono',monospace;color:#cfd5e1;margin-top:8px;">--</div></div>
+          </div>
+        </div>
+        <div style="flex:1 1 300px;min-width:0;background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;padding:16px 18px;">
+          <div style="font:500 9.5px 'Space Grotesk';letter-spacing:.14em;text-transform:uppercase;color:#5a6273;margin-bottom:14px;">P&amp;L by Symbol</div>
+          <div id="bySymbol" style="display:flex;flex-direction:column;gap:11px;"></div>
+        </div>
+      </section>
+
+      <!-- CLOSED TRADES -->
+      <section style="background:#0b0e13;border:1px solid #1a1f29;border-radius:14px;overflow:hidden;margin-bottom:32px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #161a22;">
+          <span style="font:600 13.5px 'Space Grotesk';letter-spacing:.01em;color:#e7eaf0;">Closed Trades</span>
+          <span id="tradesTag" style="font:500 11px 'JetBrains Mono',monospace;color:#5a6273;">newest first</span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;min-width:680px;">
             <thead>
-              <tr>
-                <th>Symbol</th>
-                <th class="num">Qty</th>
-                <th class="num">Avg Entry</th>
-                <th class="num">Last</th>
-                <th class="num">Mkt Value</th>
-                <th class="num">Unreal P&amp;L</th>
-                <th class="num">Unreal %</th>
-                <th class="num">Day %</th>
+              <tr style="text-align:right;">
+                <th style="text-align:left;font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 18px;">Exit Time</th>
+                <th style="text-align:left;font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Symbol</th>
+                <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Qty</th>
+                <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">Entry Avg</th>
+                <th style="font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 14px;">P&amp;L</th>
+                <th style="text-align:right;font:600 9.5px 'Space Grotesk';letter-spacing:.08em;text-transform:uppercase;color:#545c6b;padding:10px 18px;">Exit Type</th>
               </tr>
             </thead>
-            <tbody id="pos-body"></tbody>
+            <tbody id="tradesBody"></tbody>
           </table>
         </div>
-        <div class="panel-body" id="no-trade-wrap" style="display:none;">
-          <div id="no-trade-list" style="font-size:0.82rem; color:var(--text); padding:0.3rem 0; line-height:1.7;">
-            Loading...
-          </div>
-        </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Bot State</h2>
-          <span class="tag" id="bot-pid-tag">pid —</span>
-        </div>
-        <div class="panel-body">
-          <div class="kv-list">
-            <div class="kv-row"><span class="k">State</span><span class="v" id="bs-state">—</span></div>
-            <div class="kv-row"><span class="k">New entries</span><span class="v" id="bs-halt">—</span></div>
-            <div class="kv-row"><span class="k">Score threshold</span><span class="v" id="bs-score">—</span></div>
-            <div class="kv-row"><span class="k">Min momentum</span><span class="v" id="bs-mom">—</span></div>
-            <div class="kv-row"><span class="k">Max loss / day</span><span class="v" id="bs-maxloss">—</span></div>
-            <div class="kv-row"><span class="k">Stop / Take-profit</span><span class="v" id="bs-stop-tp">—</span></div>
-            <div class="kv-row"><span class="k">Trailing stop</span><span class="v" id="bs-trail">—</span></div>
-            <div class="kv-row"><span class="k">Max positions</span><span class="v" id="bs-maxpos">—</span></div>
-            <div class="kv-row"><span class="k">Universe</span><span class="v" id="bs-univ">—</span></div>
-          </div>
-        </div>
-      </section>
-    </div>
+    </main>
+  </div>
+</div>
 
-    <!-- Session stats -->
-    <section class="panel" style="margin-bottom: 0.95rem;">
-      <div class="panel-header">
-        <h2>Session Stats <span style="color:var(--muted); font-weight:500;">// parsed from bot.log, today ET</span></h2>
-        <span class="tag" id="et-today">—</span>
+<script>
+// ---- helpers ----
+const $ = id => document.getElementById(id);
+const fUsd = v => '$' + Math.abs(Number(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fSigned = v => { v = Number(v)||0; return (v>=0?'+':'\u2212') + fUsd(v); };
+const fPct = v => { v = Number(v)||0; return (v>=0?'+':'\u2212') + Math.abs(v).toFixed(2)+'%'; };
+const col = v => Number(v)>0?'#19e08f':Number(v)<0?'#ff5066':'#cfd5e1';
+
+// ---- flash on value change ----
+const _prev = {};
+function flash(id, numVal) {
+  const el = $(id); if (!el) return;
+  const p = _prev[id];
+  if (p !== undefined && p !== numVal) {
+    el.style.animation = 'none'; void el.offsetWidth;
+    el.style.animation = (numVal >= p ? 'flashUp' : 'flashDown') + ' .7s ease-out';
+  }
+  _prev[id] = numVal;
+}
+
+// ---- equity history for chart ----
+let eqHist = [];       // array of equity floats
+let eqOpen = null;     // session open equity
+
+function pushEquity(v, dayStartEquity) {
+  if (dayStartEquity && eqOpen === null) eqOpen = dayStartEquity;
+  if (eqOpen === null) eqOpen = v;
+  eqHist.push(v);
+  if (eqHist.length > 300) eqHist.shift();
+}
+
+function renderChart() {
+  if (!eqHist.length) return;
+  const open = eqOpen || eqHist[0];
+  const vals = eqHist;
+  const lo = Math.min(open, ...vals), hi = Math.max(open, ...vals);
+  const pad = (hi - lo) * 0.14 || 120;
+  const mn = lo - pad, mx = hi + pad, rng = (mx - mn) || 1;
+  const VW = 1000, VH = 260, top = 14, bot = 12;
+  const X = i => vals.length < 2 ? 0 : i / (vals.length-1) * VW;
+  const Y = v => top + (1-(v-mn)/rng)*(VH-top-bot);
+  let line = '';
+  vals.forEach((v,i) => { line += (i?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' '; });
+  const area = 'M0,'+VH+' '+vals.map((v,i)=>'L'+X(i).toFixed(1)+','+Y(v).toFixed(1)).join(' ')+' L'+VW+','+VH+' Z';
+  const last = vals[vals.length-1];
+  const up = last >= open;
+  const stroke = up ? '#19e08f' : '#ff5066';
+  const openY = Y(open).toFixed(1);
+  $('svgLine').setAttribute('d', line.trim());
+  $('svgLine').setAttribute('stroke', stroke);
+  $('svgArea').setAttribute('d', area);
+  $('svgArea').setAttribute('fill', up ? 'url(#gUp)' : 'url(#gDn)');
+  $('svgOpenLine').setAttribute('y1', openY); $('svgOpenLine').setAttribute('y2', openY);
+  $('chartDot').style.top = (Y(last)/VH*100).toFixed(2)+'%';
+  $('dotPulse').style.background = stroke; $('dotCore').style.background = stroke;
+  $('dotCore').style.boxShadow = '0 0 10px '+stroke;
+  $('chartOpen').textContent = fUsd(open);
+  $('chartHigh').textContent = fUsd(Math.max(open,...vals));
+  $('chartLow').textContent = fUsd(Math.min(open,...vals));
+}
+
+// ---- ET clock ----
+function updateClock() {
+  const now = new Date();
+  const P = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,weekday:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(now);
+  const gp = k => { const f=P.find(p=>p.type===k); return f?f.value:'0'; };
+  const pad = n => String(n).padStart(2,'0');
+  const H = parseInt(gp('hour'),10)%24, M = parseInt(gp('minute'),10), S = parseInt(gp('second'),10);
+  const wd = gp('weekday'), weekend = wd==='Sat'||wd==='Sun';
+  const t = H*3600+M*60+S, op=34200, cl=57600;
+  const mktOpen = !weekend && t>=op && t<cl;
+  const hms = s => pad(Math.floor(s/3600))+':'+pad(Math.floor(s%3600/60))+':'+pad(s%60);
+  $('etClock').textContent = pad(H)+':'+pad(M)+':'+pad(S);
+  if (mktOpen) { $('sessionCountdown').textContent=hms(cl-t)+' to close'; $('sessionCountdown').style.color='#aeb6c6'; }
+  else if (!weekend && t<op) { $('sessionCountdown').textContent=hms(op-t)+' to open'; $('sessionCountdown').style.color='#aeb6c6'; }
+  else { $('sessionCountdown').textContent='Closed'; $('sessionCountdown').style.color='#5a6273'; }
+}
+
+// ---- no-trade reason translation ----
+function xlSymReason(code) {
+  if (code==='held') return 'Already holding a position';
+  if (code==='no_quote') return 'No market quote available';
+  if (code==='no_past_slice') return 'Not enough price history yet';
+  if (code==='dual_ma_not_uptrend') return 'Moving averages show a downtrend';
+  if (code==='candlestick_gate_fail') return 'No bullish candlestick pattern detected';
+  if (code.startsWith('blocked_by_SPY_market_filter')) return 'Blocked — SPY is in a downtrend';
+  if (code.startsWith('cooldown_until=')) return 'Entry cooldown active (until '+code.replace('cooldown_until=','')+')';
+  const mm = code.match(/^mom=([-\d.]+)<([-\d.]+)$/);
+  if (mm) return 'Momentum too weak ('+(parseFloat(mm[1])*100).toFixed(3)+'%, needs '+(parseFloat(mm[2])*100).toFixed(3)+'%)';
+  const sm = code.match(/^spread=([-\d.]+)>([-\d.]+)$/);
+  if (sm) return 'Bid-ask spread too wide ('+(parseFloat(sm[1])*100).toFixed(3)+'%, max '+(parseFloat(sm[2])*100).toFixed(3)+'%)';
+  const sc = code.match(/^score=([-\d.]+)<([-\d.]+)/);
+  if (sc) return 'Entry score too low ('+parseFloat(sc[1]).toFixed(4)+', needs '+parseFloat(sc[2]).toFixed(4)+')';
+  return code;
+}
+
+function xlBlocker(b) {
+  b = b.replace('Blocker: ','').trim();
+  if (b.includes('halt_new_entries=True')) return 'New entries are paused (halted from dashboard or risk limit).';
+  if (b.includes('ENTRY_PENDING')) return 'Waiting for a limit buy order to fill or time out.';
+  if (b.includes('EXIT_PENDING')) return 'Waiting for a sell order to complete.';
+  if (b.includes('Market data stale')) return 'Market data is stale — latest bar is too old. Normal outside market hours.';
+  if (b.includes('Opening range delay')) { const m=b.match(/(\d+)m/); return 'Waiting for opening range delay ('+(m?m[1]+'min':'a few minutes')+' after open).'; }
+  if (b.includes('min_seconds_between_entry_orders')) return 'Cooling down between entry attempts.';
+  if (b.includes('max_open_positions reached')) return 'Already at maximum number of open positions.';
+  if (b.includes('qty=0')) return 'Candidate passed filters but position size is zero (loss limit / cash / cap).';
+  if (b.includes('No quote')) return 'Found a candidate but no market quote available.';
+  return b;
+}
+
+function parseReasonMsg(msg) {
+  const lines = [];
+  for (const sec of msg.split(' | ')) {
+    if (sec.startsWith('Blocker:')) lines.push(xlBlocker(sec));
+    if (sec.startsWith('Detail:')) {
+      const d = sec.replace('Detail: ','').trim();
+      if (d.includes('SPY_market_filter_not_uptrend')) lines.push('SPY trending down — all new entries blocked.');
+      if (d.startsWith('no_symbols_scored')) lines.push('No symbols passed initial scoring filters.');
+      if (d.includes('scoring_bars_unavailable')) lines.push('Could not fetch market data for scoring.');
+      for (const tok of d.split(/\s+/).filter(t=>t.includes(':')&&!t.startsWith('SPY_market'))) {
+        const ci=tok.indexOf(':');
+        lines.push(tok.substring(0,ci)+' — '+xlSymReason(tok.substring(ci+1)));
+      }
+    }
+  }
+  return lines.length ? lines : [msg];
+}
+
+function renderDiagnostics(reasons, warnings) {
+  let html = '';
+  if (reasons && reasons.length) {
+    const r = reasons[0];
+    html += `<div style="color:#5a6273;font:500 11px 'JetBrains Mono',monospace;padding:12px 0 4px;">Last checked: ${r.ts}</div>`;
+    for (const ln of parseReasonMsg(r.message)) {
+      html += `<div style="display:flex;align-items:flex-start;gap:11px;padding:10px 0;border-top:1px solid #14181f;">
+        <span style="margin-top:6px;width:6px;height:6px;border-radius:50%;background:#ffb020;flex:none;"></span>
+        <span style="font:500 13px/1.5 'JetBrains Mono',monospace;color:#aeb6c6;">${ln}</span></div>`;
+    }
+  }
+  if (warnings && warnings.length) {
+    html += '<div style="border-top:1px solid #1a1f29;margin-top:8px;padding-top:6px;">';
+    for (const w of warnings) {
+      html += `<div style="padding:5px 0;font:500 11px/1.4 'JetBrains Mono',monospace;"><span style="color:#5a6273;font-size:0.9em;">${w.ts} </span><span style="color:#ffb020;">${w.message}</span></div>`;
+    }
+    html += '</div>';
+  }
+  if (!html) html = `<div style="color:#5a6273;font:500 12px 'JetBrains Mono',monospace;padding:16px 0;">No diagnostic entries in log yet.</div>`;
+  $('diagList').innerHTML = html;
+}
+
+// ---- normalize /api/status → internal ----
+function normalizeStatus(raw) {
+  if (!raw) return null;
+  const acc = raw.account || {};
+  const positions = (raw.positions || []).map(p => ({
+    symbol: p.symbol,
+    qty: p.qty,
+    avgEntry: Number(p.avg_entry_price) || 0,
+    lastPrice: Number(p.current_price) || 0,
+    marketValue: Number(p.market_value) || 0,
+    unrealizedPnl: Number(p.unrealized_pl) || 0,
+    unrealizedPct: (Number(p.unrealized_plpc) || 0) * 100,
+    dayPct: (Number(p.change_today) || 0) * 100,
+  }));
+  const scoreRaw = raw.dynamic_entry_score_threshold ?? raw.entry_score_threshold_default;
+  const momRaw   = raw.dynamic_min_momentum_return   ?? raw.min_momentum_return_default;
+  return {
+    botRunning: !!raw.running,
+    entriesHalted: !!raw.halt_new_entries,
+    mode: raw.paper ? 'paper' : 'live',
+    equity: Number(acc.equity) || 0,
+    dayPnl: Number(acc.day_change_abs) || 0,
+    dayPnlPct: Number(acc.day_change_pct) || 0,
+    buyingPower: Number(acc.buying_power) || 0,
+    realizedPnl: Number(raw.daily_realized_pnl) || 0,
+    unrealizedPnl: Number(raw.positions_total_unrealized_pl) || 0,
+    exposure: Number(raw.positions_total_market_value) || 0,
+    equityCap: Number(raw.max_portfolio_notional_usd) || 0,
+    dayStartEquity: Number(raw.day_start_equity) || 0,
+    marketOpen: raw.clock ? !!raw.clock.is_open : null,
+    positions,
+    cfg: {
+      scoreThreshold: Number(scoreRaw) || 0,
+      momentumThreshold: (Number(momRaw) || 0) * 100,
+      maxDailyLoss: Math.abs(Number(raw.max_daily_realized_loss) || 0),
+      stopLossPct: (Number(raw.stop_loss_pct) || 0) * 100,
+      takeProfitPct: (Number(raw.take_profit_pct) || 0) * 100,
+      trailingStopPct: (Number(raw.trailing_stop_pct) || 0) * 100,
+      maxPositions: Number(raw.max_open_positions) || 0,
+      universe: raw.symbols_universe || [],
+    },
+  };
+}
+
+// ---- normalize /api/trades → internal ----
+function normalizeTrades(raw) {
+  if (!raw) return { closed: [], stats: {} };
+  const st = raw.stats || {};
+  const bySymbol = Object.entries(st.pnl_by_symbol || {}).map(([sym, pnl]) => ({ symbol: sym, pnl: Number(pnl) }));
+  return {
+    closed: (raw.trades || []).map(t => ({
+      exitTime: t.exit_ts || '--',
+      symbol: t.symbol || '?',
+      qty: t.qty,
+      entryAvg: Number(t.entry_avg) || 0,
+      pnl: Number(t.exit_pnl) || 0,
+      exitType: t.exit_kind === 'stop_loss' ? 'STOP' : 'MKT EXIT',
+    })),
+    stats: {
+      tradesToday: st.daily_trade_count ?? 0,
+      pnlToday: Number(st.daily_pnl) || 0,
+      totalTrades: st.trade_count ?? 0,
+      totalPnl: Number(st.total_pnl) || 0,
+      winRate: Number(st.win_rate_pct) || 0,
+      avgPerTrade: Number(st.avg_pnl_per_trade) || 0,
+      bySymbol,
+    },
+  };
+}
+
+// ---- main render ----
+function render(s, trades, online) {
+  if (!s) return;
+  const t = trades || {};
+  const st = t.stats || {};
+  const cfg = s.cfg || {};
+  const positions = s.positions || [];
+
+  // flash numeric values
+  flash('equityText',   s.equity);
+  flash('realizedPnl',  s.realizedPnl);
+  flash('unrealizedPnl',s.unrealizedPnl);
+  flash('buyingPower',  s.buyingPower);
+  flash('exposure',     s.exposure);
+  flash('dayPnlBadge',  s.dayPnl);
+
+  // -- header status pills --
+  const mktC  = s.marketOpen === null ? '#ffb020' : s.marketOpen ? '#19e08f' : '#ff5066';
+  const mktTx = s.marketOpen === null ? 'NO DATA' : s.marketOpen ? 'OPEN' : 'CLOSED';
+  $('mktPulse').style.background = mktC; $('mktCore').style.background = mktC;
+  $('mktText').textContent = mktTx; $('mktText').style.color = mktC;
+
+  const botC = s.botRunning ? '#19e08f' : '#ff5066';
+  $('botPulse').style.background = botC; $('botCore').style.background = botC;
+  $('botText').textContent = s.botRunning ? 'RUNNING' : 'STOPPED';
+  $('botText').style.color = botC;
+
+  const isLive = s.mode === 'live';
+  const modeC  = isLive ? '#ff5066' : '#4d8dff';
+  $('modeChip').style.background   = isLive ? 'rgba(255,80,102,.1)' : 'rgba(77,141,255,.1)';
+  $('modeChip').style.borderColor  = isLive ? 'rgba(255,80,102,.4)' : 'rgba(77,141,255,.4)';
+  $('modeText').textContent = isLive ? 'LIVE' : 'PAPER';
+  $('modeText').style.color = modeC;
+  $('offlineBadge').style.display = online ? 'none' : 'flex';
+
+  const etFmt = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  $('lastSync').textContent = etFmt.format(new Date()).replace(/^24/,'00');
+
+  // -- engine state --
+  let chip, chipC;
+  if (!s.botRunning) { chip='STOPPED'; chipC='#ff5066'; }
+  else if (s.entriesHalted) { chip='HALTED'; chipC='#ffb020'; }
+  else { chip='ACTIVE'; chipC='#19e08f'; }
+  $('stChip').textContent=chip; $('stChip').style.color=chipC;
+  $('stDot').style.background=chipC; $('stDot').style.boxShadow='0 0 12px '+chipC;
+  $('entriesText').textContent = s.entriesHalted ? 'HALTED' : 'ALLOWED';
+  $('entriesText').style.color  = s.entriesHalted ? '#ffb020' : '#19e08f';
+  $('slotsText').textContent = positions.length + ' / ' + (cfg.maxPositions || 0);
+
+  // -- risk params --
+  $('rScore').textContent = (cfg.scoreThreshold || 0).toFixed(4);
+  $('rMom').textContent   = (cfg.momentumThreshold || 0).toFixed(3) + '%';
+  $('rMaxLoss').textContent = fUsd(cfg.maxDailyLoss || 0);
+  $('rStopTp').textContent  = (cfg.stopLossPct||0).toFixed(1)+'% / '+(cfg.takeProfitPct||0).toFixed(1)+'%';
+  $('rTrail').textContent   = (cfg.trailingStopPct||0).toFixed(1)+'%';
+  $('universe').innerHTML   = (cfg.universe||[]).map(u =>
+    `<span style="font:600 11px 'JetBrains Mono',monospace;color:#aeb6c6;background:#06080b;border:1px solid #1c212c;border-radius:6px;padding:4px 8px;">${u}</span>`
+  ).join('');
+
+  // -- hero equity --
+  $('equityText').textContent = fUsd(s.equity);
+  const dayC = col(s.dayPnl);
+  const dayBg = s.dayPnl >= 0 ? 'rgba(25,224,143,.1)' : 'rgba(255,80,102,.1)';
+  $('dayPnlBadge').textContent = (s.dayPnl>=0?'▲ ':'▼ ') + fSigned(s.dayPnl);
+  $('dayPnlBadge').style.color=dayC; $('dayPnlBadge').style.borderColor=dayC; $('dayPnlBadge').style.background=dayBg;
+  $('dayPnlPct').textContent = fPct(s.dayPnlPct); $('dayPnlPct').style.color = dayC;
+
+  // -- metric strip --
+  $('realizedPnl').textContent=fSigned(s.realizedPnl); $('realizedPnl').style.color=col(s.realizedPnl);
+  $('unrealizedPnl').textContent=fSigned(s.unrealizedPnl); $('unrealizedPnl').style.color=col(s.unrealizedPnl);
+  $('buyingPower').textContent=fUsd(s.buyingPower);
+  $('exposure').textContent=fUsd(s.exposure);
+  const expPct = s.equity ? (s.exposure/s.equity*100) : 0;
+  $('exposurePct').textContent = expPct.toFixed(1)+'% of equity';
+
+  // -- ticker --
+  if (positions.length) {
+    $('tickerSection').style.display = '';
+    const items = positions.map(p =>
+      `<div style="display:flex;align-items:center;gap:9px;padding:11px 22px;border-right:1px solid #11151c;">
+        <span style="font:700 13px 'JetBrains Mono',monospace;color:#e7eaf0;">${p.symbol}</span>
+        <span style="font:500 13px 'JetBrains Mono',monospace;color:#8b93a4;">${fUsd(p.lastPrice)}</span>
+        <span style="font:700 13px 'JetBrains Mono',monospace;color:${col(p.unrealizedPnl)};">${fSigned(p.unrealizedPnl)}</span>
+      </div>`
+    ).join('');
+    $('tickerTrack').innerHTML = items + items;
+  } else {
+    $('tickerSection').style.display = 'none';
+  }
+
+  // -- positions / diagnostics panel --
+  if (positions.length) {
+    $('posView').style.display = ''; $('diagView').style.display = 'none';
+    $('posSlots').textContent = positions.length + ' / ' + (cfg.maxPositions || 0);
+    $('posBody').innerHTML = positions.map(p => {
+      const uc=col(p.unrealizedPnl), upc=col(p.unrealizedPct), dc=col(p.dayPct);
+      return `<tr style="text-align:right;border-top:1px solid #14181f;">
+        <td style="text-align:left;padding:12px 18px;"><span style="display:inline-flex;align-items:center;gap:9px;">
+          <span style="width:3px;height:16px;border-radius:2px;background:${uc};"></span>
+          <span style="font:700 13px 'JetBrains Mono',monospace;color:#e7eaf0;">${p.symbol}</span></span></td>
+        <td style="padding:12px 14px;font:500 13px 'JetBrains Mono',monospace;color:#8b93a4;">${p.qty}</td>
+        <td style="padding:12px 14px;font:500 13px 'JetBrains Mono',monospace;color:#8b93a4;">${fUsd(p.avgEntry)}</td>
+        <td style="padding:12px 14px;font:600 13px 'JetBrains Mono',monospace;color:#e7eaf0;">${fUsd(p.lastPrice)}</td>
+        <td style="padding:12px 14px;font:500 13px 'JetBrains Mono',monospace;color:#cfd5e1;">${fUsd(p.marketValue)}</td>
+        <td style="padding:12px 14px;font:700 13px 'JetBrains Mono',monospace;color:${uc};">${fSigned(p.unrealizedPnl)}</td>
+        <td style="padding:12px 14px;font:700 13px 'JetBrains Mono',monospace;color:${upc};">${fPct(p.unrealizedPct)}</td>
+        <td style="padding:12px 18px;font:700 13px 'JetBrains Mono',monospace;color:${dc};">${fPct(p.dayPct)}</td>
+      </tr>`;
+    }).join('');
+  } else {
+    $('posView').style.display = 'none'; $('diagView').style.display = '';
+  }
+
+  // -- session stats --
+  $('stTradesToday').textContent = st.tradesToday ?? 0;
+  $('stPnlToday').textContent = fSigned(st.pnlToday||0); $('stPnlToday').style.color=col(st.pnlToday||0);
+  $('stWinRate').textContent   = (st.winRate||0).toFixed(1)+'%';
+  $('stTotalTrades').textContent = st.totalTrades ?? 0;
+  $('stTotalPnl').textContent  = fSigned(st.totalPnl||0); $('stTotalPnl').style.color=col(st.totalPnl||0);
+  $('stAvgTrade').textContent  = fSigned(st.avgPerTrade||0); $('stAvgTrade').style.color=col(st.avgPerTrade||0);
+
+  // -- P&L by symbol bars --
+  const bs = st.bySymbol || [];
+  const maxAbs = Math.max(1, ...bs.map(b=>Math.abs(b.pnl)));
+  $('bySymbol').innerHTML = bs.map(b => {
+    const posW = b.pnl>0?(Math.abs(b.pnl)/maxAbs*100).toFixed(0)+'%':'0%';
+    const negW = b.pnl<0?(Math.abs(b.pnl)/maxAbs*100).toFixed(0)+'%':'0%';
+    return `<div style="display:flex;align-items:center;gap:10px;">
+      <span style="width:46px;flex:none;font:700 12px 'JetBrains Mono',monospace;color:#aeb6c6;">${b.symbol}</span>
+      <div style="flex:1;display:flex;align-items:center;height:10px;">
+        <div style="flex:1;display:flex;justify-content:flex-end;"><div style="height:8px;border-radius:3px;width:${negW};background:#ff5066;"></div></div>
+        <div style="width:1px;height:14px;background:#262c37;"></div>
+        <div style="flex:1;display:flex;justify-content:flex-start;"><div style="height:8px;border-radius:3px;width:${posW};background:#19e08f;"></div></div>
       </div>
-      <div class="panel-body">
-        <div class="stats-grid">
-          <div class="stat"><div class="k">Trades today</div><div class="v" id="st-day-count">—</div></div>
-          <div class="stat"><div class="k">P&amp;L today (log)</div><div class="v" id="st-day-pnl">—</div></div>
-          <div class="stat"><div class="k">Total trades</div><div class="v" id="st-total-count">—</div></div>
-          <div class="stat"><div class="k">Total P&amp;L</div><div class="v" id="st-total-pnl">—</div></div>
-          <div class="stat"><div class="k">Win rate</div><div class="v" id="st-winrate">—</div></div>
-          <div class="stat"><div class="k">Avg / trade</div><div class="v" id="st-avg">—</div></div>
-        </div>
-        <p class="msg-line" id="sym-pnl" style="margin-top: 0.8rem;"></p>
-      </div>
-    </section>
+      <span style="width:74px;flex:none;text-align:right;font:700 12px 'JetBrains Mono',monospace;color:${col(b.pnl)};">${fSigned(b.pnl)}</span>
+    </div>`;
+  }).join('') || `<div style="color:#5a6273;font:500 12px 'JetBrains Mono',monospace;">No closed trades yet.</div>`;
 
-    <!-- Trades table -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>Recent Closed Trades</h2>
-        <span class="tag" id="trade-count-tag">— trades</span>
-      </div>
-      <div class="scroll-x">
-        <table class="ttable">
-          <thead>
-            <tr>
-              <th>Exit Time</th>
-              <th>Symbol</th>
-              <th class="num">Qty</th>
-              <th class="num">Entry Avg</th>
-              <th class="num">P&amp;L</th>
-              <th>Exit Type</th>
-            </tr>
-          </thead>
-          <tbody id="trades-body"></tbody>
-        </table>
-      </div>
-    </section>
+  // -- closed trades table --
+  const closed = t.closed || [];
+  $('tradesTag').textContent = closed.length + ' trade' + (closed.length===1?'':'s');
+  $('tradesBody').innerHTML = closed.length ? closed.map(c => {
+    const isStop = c.exitType === 'STOP';
+    const ec = isStop?'#ff5066':'#8b93a4';
+    const eb = isStop?'rgba(255,80,102,.1)':'rgba(139,147,164,.08)';
+    const ed = isStop?'rgba(255,80,102,.35)':'rgba(139,147,164,.25)';
+    return `<tr style="text-align:right;border-top:1px solid #14181f;">
+      <td style="text-align:left;padding:11px 18px;font:500 13px 'JetBrains Mono',monospace;color:#8b93a4;">${c.exitTime}</td>
+      <td style="text-align:left;padding:11px 14px;font:700 13px 'JetBrains Mono',monospace;color:#e7eaf0;">${c.symbol}</td>
+      <td style="padding:11px 14px;font:500 13px 'JetBrains Mono',monospace;color:#8b93a4;">${c.qty??'--'}</td>
+      <td style="padding:11px 14px;font:500 13px 'JetBrains Mono',monospace;color:#cfd5e1;">${fUsd(c.entryAvg)}</td>
+      <td style="padding:11px 14px;font:700 13px 'JetBrains Mono',monospace;color:${col(c.pnl)};">${fSigned(c.pnl)}</td>
+      <td style="padding:11px 18px;text-align:right;">
+        <span style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.06em;color:${ec};background:${eb};border:1px solid ${ed};border-radius:6px;padding:4px 9px;">${c.exitType}</span>
+      </td></tr>`;
+  }).join('')
+  : `<tr><td colspan="6" style="padding:20px 18px;font:500 13px 'JetBrains Mono',monospace;color:#5a6273;text-align:center;">No closed trades in log yet.</td></tr>`;
 
-    <footer>
-      <div>Log: <code id="log-path">bot.log</code> · Local dashboard @ <code>127.0.0.1:5050</code> · Auto-refresh <span id="refresh-sec">10</span>s</div>
-    </footer>
-  </main>
+  renderChart();
+}
 
-  <script>
-    // ---------- helpers ----------
-    const $ = (id) => document.getElementById(id);
+// ---- API + state ----
+let _status = null, _trades = null, _reasons = [], _warnings = [], _online = false;
 
-    function fmtUsd(x, { signed = false, digits = 2 } = {}) {
-      if (x == null || x === "" || Number.isNaN(Number(x))) return "—";
-      const n = Number(x);
-      const sign = signed ? (n >= 0 ? "+" : "") : "";
-      return sign + "$" + n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+function setMsg(txt, ok) {
+  const el = $('actionMsg');
+  el.textContent = txt;
+  el.style.color = ok===true ? '#19e08f' : ok===false ? '#ff5066' : '#5a6273';
+}
+
+async function refreshAll() {
+  try {
+    const [sRaw, tRaw, rRaw] = await Promise.all([
+      fetch('/api/status').then(x => x.json()),
+      fetch('/api/trades').then(x => x.json()),
+      fetch('/api/no-trade-reasons').then(x => x.json()),
+    ]);
+    const prev = _status;
+    _status  = normalizeStatus(sRaw);
+    _trades  = normalizeTrades(tRaw);
+    _reasons = rRaw.reasons  || [];
+    _warnings= rRaw.warnings || [];
+    _online  = true;
+    if (_status) pushEquity(_status.equity, _status.dayStartEquity);
+    render(_status, _trades, _online);
+    if (!(_status && _status.positions.length)) renderDiagnostics(_reasons, _warnings);
+  } catch(e) {
+    _online = false;
+    $('offlineBadge').style.display = 'flex';
+    if (_status) render(_status, _trades, false);
+  }
+}
+
+async function control(kind) {
+  if (kind==='stop' && !confirm('Stop bot, cancel orders, and market-sell open positions?')) return;
+  setMsg('Working…');
+  try {
+    const r = await fetch('/api/'+kind, { method: 'POST' });
+    const j = await r.json();
+    setMsg(j.ok ? (j.message||'OK') : (j.error||'Error'), !!j.ok);
+  } catch(e) { setMsg(String(e), false); }
+  setTimeout(refreshAll, kind==='stop' ? 2000 : 800);
+}
+
+// ---- wire up ----
+$('btnRefresh').onclick = () => refreshAll();
+$('btnStart').onclick   = () => control('start');
+$('btnResume').onclick  = () => control('resume-entries');
+$('btnStop').onclick    = () => control('stop');
+
+// ---- config editor ----
+function toggleCfg() {
+  const p = $('cfgPanel'), a = $('cfgArrow');
+  const open = p.style.display === 'none';
+  p.style.display = open ? '' : 'none';
+  a.style.transform = open ? 'rotate(180deg)' : '';
+  if (open) loadConfig();
+}
+
+async function loadConfig() {
+  try {
+    const j = await fetch('/api/config').then(x => x.json());
+    // Pct fields stored as fractions → show as %
+    const pctKeys = ['STOP_LOSS_PCT','TAKE_PROFIT_PCT','TRAILING_STOP_PCT'];
+    // Loss is stored negative → show absolute
+    for (const [k, v] of Object.entries(j)) {
+      const el = $('cfg_' + k);
+      if (!el) continue;
+      if (pctKeys.includes(k)) el.value = (v * 100).toFixed(3);
+      else if (k === 'MAX_DAILY_REALIZED_LOSS') el.value = Math.abs(v);
+      else el.value = v;
     }
-    function fmtNum(x, digits = 2) {
-      if (x == null || x === "" || Number.isNaN(Number(x))) return "—";
-      return Number(x).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-    }
-    function fmtPct(x, digits = 2) {
-      if (x == null || x === "" || Number.isNaN(Number(x))) return "—";
-      const n = Number(x);
-      return (n >= 0 ? "+" : "") + n.toFixed(digits) + "%";
-    }
-    function fmtPnl(x, digits = 2) {
-      if (x == null || x === "" || Number.isNaN(Number(x))) return "—";
-      const n = Number(x);
-      return (n >= 0 ? "+" : "") + n.toFixed(digits);
-    }
-    function pnlClass(x) {
-      if (x == null || x === "") return "zero";
-      const n = Number(x);
-      if (n > 0) return "up";
-      if (n < 0) return "down";
-      return "zero";
-    }
+  } catch(e) { $('cfgMsg').textContent = 'Failed to load config.'; $('cfgMsg').style.color='#ff5066'; }
+}
 
-    async function fetchJson(url, opts) {
-      const r = await fetch(url, opts);
-      const text = await r.text();
-      let data = null;
-      try { data = JSON.parse(text); }
-      catch (e) { throw new Error("Non-JSON from " + url + ": " + text.slice(0, 120)); }
-      if (!r.ok || (data && data.ok === false)) {
-        throw new Error((data && data.error) ? data.error : ("HTTP " + r.status));
-      }
-      return data;
-    }
+async function saveConfig() {
+  const btn = $('cfgSaveBtn'), msg = $('cfgMsg');
+  btn.disabled = true; msg.textContent = 'Saving…'; msg.style.color = '#5a6273';
+  const pctKeys = ['STOP_LOSS_PCT','TAKE_PROFIT_PCT','TRAILING_STOP_PCT'];
+  const intKeys = ['MAX_OPEN_POSITIONS','ENTRY_COOLDOWN_SEC','POST_LOSS_EXTRA_COOLDOWN_SEC','MARKET_OPEN_DELAY_MINUTES'];
+  const payload = {};
+  const fields = ['MAX_OPEN_POSITIONS','MAX_PORTFOLIO_NOTIONAL_USD','MIN_AVG_VOLUME',
+                   'ENTRY_COOLDOWN_SEC','POST_LOSS_EXTRA_COOLDOWN_SEC','MARKET_OPEN_DELAY_MINUTES',
+                   'MAX_DAILY_REALIZED_LOSS','STOP_LOSS_PCT','TAKE_PROFIT_PCT','TRAILING_STOP_PCT'];
+  for (const k of fields) {
+    const el = $('cfg_' + k); if (!el || el.value === '') continue;
+    let v = parseFloat(el.value);
+    if (isNaN(v)) continue;
+    if (pctKeys.includes(k)) v = v / 100;          // % → fraction
+    if (k === 'MAX_DAILY_REALIZED_LOSS') v = -Math.abs(v); // ensure negative
+    if (intKeys.includes(k)) v = Math.round(v);
+    payload[k] = v;
+  }
+  try {
+    const r = await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const j = await r.json();
+    msg.textContent = j.ok ? (j.message || 'Saved.') : (j.error || 'Error');
+    msg.style.color = j.ok ? '#19e08f' : '#ff5066';
+    if (j.ok) { setTimeout(refreshAll, 300); setTimeout(loadConfig, 300); }
+  } catch(e) { msg.textContent = String(e); msg.style.color = '#ff5066'; }
+  btn.disabled = false;
+}
 
-    // ---------- live ET clock + countdown to close ----------
-    let nextCloseMs = null;
-    let marketIsOpen = null;
-    function tickClock() {
-      const now = new Date();
-      // Render ET HH:MM:SS via Intl
-      try {
-        const fmt = new Intl.DateTimeFormat("en-US", {
-          timeZone: "America/New_York",
-          hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
-        });
-        $("et-clock").textContent = fmt.format(now) + " ET";
-      } catch { $("et-clock").textContent = "--:--:--"; }
-
-      if (marketIsOpen && nextCloseMs) {
-        const diff = Math.max(0, Math.floor((nextCloseMs - now.getTime()) / 1000));
-        const h = String(Math.floor(diff / 3600)).padStart(2, "0");
-        const m = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
-        const s = String(diff % 60).padStart(2, "0");
-        $("to-close").textContent = `${h}:${m}:${s}`;
-      } else if (marketIsOpen === false) {
-        $("to-close").textContent = "CLOSED";
-      }
-    }
-    setInterval(tickClock, 1000);
-
-    // ---------- value flash on change ----------
-    const lastVals = {};
-    function setVal(id, text, opts = {}) {
-      const el = $(id);
-      if (!el) return;
-      const prev = lastVals[id];
-      if (prev !== undefined && prev !== text) {
-        el.classList.remove("flash");
-        void el.offsetWidth;
-        el.classList.add("flash");
-      }
-      lastVals[id] = text;
-      el.textContent = text;
-      if (opts.className) el.className = opts.className;
-    }
-
-    // ---------- status ----------
-    function stateChipHtml(state) {
-      const s = (state || "").toUpperCase();
-      let cls = "chip-flat";
-      if (s === "ENTRY_PENDING") cls = "chip-pend";
-      else if (s === "IN_POSITION") cls = "chip-in";
-      else if (s === "EXIT_PENDING") cls = "chip-exit";
-      return `<span class="state-chip ${cls}">${s || "UNKNOWN"}</span>`;
-    }
-
-    async function loadStatus() {
-      const s = await fetchJson("/api/status");
-
-      // top bar: bot process + mode
-      const botOn = !!s.running;
-      $("bot-dot").className = "dot " + (botOn ? "live" : "stop");
-      $("bot-label").textContent = botOn ? "RUNNING" : "STOPPED";
-      $("bot-pid-tag").textContent = "pid " + (s.pid || "—");
-
-      const modeChip = s.paper
-        ? '<span class="state-chip chip-paper">PAPER</span>'
-        : '<span class="state-chip chip-live">LIVE</span>';
-      $("mode-chip").innerHTML = modeChip;
-
-      // clock
-      if (s.clock) {
-        marketIsOpen = !!s.clock.is_open;
-        $("mkt-dot").className = "dot " + (marketIsOpen ? "live" : "stop");
-        $("mkt-label").textContent = marketIsOpen ? "OPEN" : "CLOSED";
-        try {
-          nextCloseMs = s.clock.next_close ? new Date(s.clock.next_close).getTime() : null;
-        } catch { nextCloseMs = null; }
-      } else {
-        marketIsOpen = null;
-        $("mkt-dot").className = "dot warn";
-        $("mkt-label").textContent = "NO DATA";
-      }
-      tickClock();
-
-      // Account metrics
-      const acc = s.account || {};
-      setVal("m-equity", fmtUsd(acc.equity));
-      const dayChg = acc.day_change_abs;
-      const dayPct = acc.day_change_pct;
-      const cls = pnlClass(dayChg);
-      setVal("m-equity-sub", "vs prev close " + (dayPct != null ? fmtPct(dayPct) : "—"));
-      $("m-equity-sub").className = "sub " + cls;
-      setVal("m-daypnl", (dayChg != null ? fmtUsd(dayChg, { signed: true }) : "—"), {
-        className: "v chg " + cls,
-      });
-      setVal("m-daypnl-sub", "intraday mark-to-market (equity − last_equity)");
-
-      // Realized (bot side)
-      const realized = s.daily_realized_pnl;
-      setVal("m-realized", (realized != null ? fmtUsd(realized, { signed: true }) : "—"), {
-        className: "v chg " + pnlClass(realized),
-      });
-      const maxLoss = s.max_daily_realized_loss;
-      const pctUsed = (realized != null && maxLoss != null && maxLoss < 0)
-        ? Math.max(0, Math.min(100, (realized / maxLoss) * 100))
-        : null;
-      setVal("m-realized-sub",
-        "kill @ " + (maxLoss != null ? fmtUsd(maxLoss, { signed: true }) : "—") +
-        (pctUsed != null ? ` · used ${pctUsed.toFixed(0)}%` : "")
-      );
-
-      // Unrealized total
-      const unreal = s.positions_total_unrealized_pl;
-      setVal("m-unreal", (unreal != null ? fmtUsd(unreal, { signed: true }) : "—"), {
-        className: "v chg " + pnlClass(unreal),
-      });
-      const posCount = (s.positions || []).length;
-      setVal("m-unreal-sub", posCount + " open position" + (posCount === 1 ? "" : "s"));
-
-      // Buying power + cash
-      setVal("m-bp", fmtUsd(acc.buying_power));
-      setVal("m-cash-sub", "cash " + (acc.cash != null ? fmtUsd(acc.cash) : "—"));
-
-      // Exposure
-      const longMV = s.positions_total_market_value || 0;
-      const cap    = s.max_portfolio_notional_usd || 0;
-      setVal("m-expo", fmtUsd(longMV));
-      const pctExpo = cap > 0 ? (longMV / cap) * 100 : 0;
-      setVal("m-expo-sub", "long MV / " + fmtUsd(cap) + " cap · " + pctExpo.toFixed(0) + "%");
-
-      // Positions table
-      const tbody = $("pos-body");
-      tbody.innerHTML = "";
-      const positions = s.positions || [];
-      if (positions.length) {
-        positions.forEach(p => {
-          const pnlCls = pnlClass(p.unrealized_pl);
-          const dayCls = pnlClass(p.change_today);
-          const tr = document.createElement("tr");
-          tr.innerHTML =
-            `<td><span class="sym-tag">${p.symbol}</span></td>` +
-            `<td class="num">${fmtNum(p.qty, 0)}</td>` +
-            `<td class="num">${fmtNum(p.avg_entry_price, 4)}</td>` +
-            `<td class="num">${fmtNum(p.current_price, 4)}</td>` +
-            `<td class="num">${fmtUsd(p.market_value)}</td>` +
-            `<td class="num ${pnlCls}">${fmtPnl(p.unrealized_pl)}</td>` +
-            `<td class="num ${pnlCls}">${fmtPct((p.unrealized_plpc || 0) * 100)}</td>` +
-            `<td class="num ${dayCls}">${fmtPct((p.change_today || 0) * 100)}</td>`;
-          tbody.appendChild(tr);
-        });
-      }
-
-      // Swap between positions table and no-trade summary
-      updateNoTradePanel(positions.length);
-
-      // Bot state panel
-      $("bs-state").innerHTML = stateChipHtml(s.bot_state);
-      $("bs-halt").innerHTML = s.halt_new_entries
-        ? '<span class="state-chip chip-halt">HALTED</span>'
-        : '<span class="state-chip chip-allow">ALLOWED</span>';
-
-      const scoreDyn = s.dynamic_entry_score_threshold;
-      const scoreDef = s.entry_score_threshold_default;
-      $("bs-score").textContent =
-        (scoreDyn != null ? Number(scoreDyn).toFixed(6) : (scoreDef != null ? Number(scoreDef).toFixed(6) + " (default)" : "—"));
-
-      const momDyn = s.dynamic_min_momentum_return;
-      const momDef = s.min_momentum_return_default;
-      $("bs-mom").textContent =
-        (momDyn != null ? Number(momDyn).toFixed(6) : (momDef != null ? Number(momDef).toFixed(6) + " (default)" : "—"));
-
-      $("bs-maxloss").textContent = s.max_daily_realized_loss != null ? fmtUsd(s.max_daily_realized_loss, { signed: true }) : "—";
-      const slPct = s.stop_loss_pct != null ? (s.stop_loss_pct * 100).toFixed(2) + "%" : "—";
-      const tpPct = s.take_profit_pct != null ? (s.take_profit_pct * 100).toFixed(2) + "%" : "—";
-      $("bs-stop-tp").textContent = slPct + " / " + tpPct;
-      $("bs-trail").textContent = s.trailing_stop_pct != null ? (s.trailing_stop_pct * 100).toFixed(2) + "%" : "—";
-      $("bs-maxpos").textContent = s.max_open_positions != null ? String(s.max_open_positions) : "—";
-      $("bs-univ").textContent = (s.symbols_universe || []).join(", ") || "—";
-
-      // Ticker tape (positions only if any, else symbols)
-      renderTicker(s);
-
-      // Last sync
-      const now = new Date();
-      $("last-sync").textContent = now.toLocaleTimeString();
-    }
-
-    function renderTicker(s) {
-      const track = $("ticker-track");
-      const panel = $("ticker-panel");
-      const positions = s.positions || [];
-      if (!positions.length) { panel.style.display = "none"; return; }
-      panel.style.display = "block";
-      const items = positions.map(p => {
-        const cls = pnlClass(p.unrealized_pl);
-        const pct = fmtPct((p.unrealized_plpc || 0) * 100);
-        const pnl = fmtPnl(p.unrealized_pl);
-        return `<span class="ticker-item"><span class="ticker-sym">${p.symbol}</span> ` +
-               `<span>${fmtNum(p.current_price, 2)}</span> ` +
-               `<span class="${cls}">${pnl} (${pct})</span></span>`;
-      });
-      // Duplicate for seamless scroll
-      track.innerHTML = items.concat(items).join("<span style=\"color:var(--muted)\">·</span>");
-    }
-
-    // ---------- trades ----------
-    async function loadTrades() {
-      const j = await fetchJson("/api/trades");
-      $("log-path").textContent = j.log_path || "bot.log";
-      $("et-today").textContent = j.et_today || "—";
-      const st = j.stats || {};
-      setVal("st-day-count",    st.daily_trade_count != null ? String(st.daily_trade_count) : "—");
-      const dp = st.daily_pnl;
-      setVal("st-day-pnl", dp != null ? fmtPnl(dp) : "—", { className: "v " + pnlClass(dp) });
-      setVal("st-total-count",  st.trade_count != null ? String(st.trade_count) : "—");
-      const tp = st.total_pnl;
-      setVal("st-total-pnl", tp != null ? fmtPnl(tp) : "—", { className: "v " + pnlClass(tp) });
-      setVal("st-winrate", st.win_rate_pct != null ? st.win_rate_pct.toFixed(1) + "%" : "—");
-      setVal("st-avg", st.avg_pnl_per_trade != null ? fmtPnl(st.avg_pnl_per_trade, 4) : "—",
-             { className: "v " + pnlClass(st.avg_pnl_per_trade) });
-
-      const sym = st.pnl_by_symbol || {};
-      const symTxt = Object.keys(sym).length
-        ? "P&amp;L by symbol: " + Object.entries(sym).map(([k,v]) =>
-            `<span class="${pnlClass(v)}">${k} ${fmtPnl(v)}</span>`).join(" · ")
-        : "";
-      $("sym-pnl").innerHTML = symTxt;
-
-      const tbody = $("trades-body");
-      tbody.innerHTML = "";
-      const trades = j.trades || [];
-      $("trade-count-tag").textContent = trades.length + " trades";
-      if (!trades.length) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = '<td colspan="6" class="empty-hint">No closed trades in log yet.</td>';
-        tbody.appendChild(tr);
-      } else {
-        trades.forEach(t => {
-          const tr = document.createElement("tr");
-          const cls = pnlClass(t.exit_pnl);
-          const exitLabel = t.exit_kind === "stop_loss" ? "STOP" : "MKT EXIT";
-          const exitCls = t.exit_kind === "stop_loss" ? "exit-stop" : "exit-mkt";
-          tr.innerHTML =
-            `<td>${t.exit_ts || "—"}</td>` +
-            `<td><span class="sym-tag">${t.symbol || "?"}</span></td>` +
-            `<td class="num">${t.qty != null ? fmtNum(t.qty, 0) : "—"}</td>` +
-            `<td class="num">${t.entry_avg != null ? fmtNum(t.entry_avg, 4) : "—"}</td>` +
-            `<td class="num ${cls}">${fmtPnl(t.exit_pnl)}</td>` +
-            `<td><span class="exit-tag ${exitCls}">${exitLabel}</span></td>`;
-          tbody.appendChild(tr);
-        });
-      }
-    }
-
-    // ---------- no-trade summary ----------
-    let lastNoTradeLoad = 0;
-    const NO_TRADE_INTERVAL_MS = 30_000; // 30 seconds
-
-    // Translate raw diagnostic codes into plain English
-    function translateSymbolReason(sym, code) {
-      if (code === "held") return "Already holding a position";
-      if (code === "no_quote") return "No market quote available";
-      if (code === "no_past_slice") return "Not enough price history yet";
-      if (code === "dual_ma_not_uptrend") return "Moving averages show a downtrend";
-      if (code === "candlestick_gate_fail") return "No bullish candlestick pattern detected";
-      if (code.startsWith("blocked_by_SPY_market_filter")) return "Blocked \u2014 SPY is in a downtrend";
-      if (code.startsWith("cooldown_until=")) {
-        const until = code.replace("cooldown_until=", "");
-        return `Entry cooldown active (until ${until})`;
-      }
-      const momMatch = code.match(/^mom=([-\d.]+)<([-\d.]+)$/);
-      if (momMatch) {
-        const actual = (parseFloat(momMatch[1]) * 100).toFixed(3);
-        const needed = (parseFloat(momMatch[2]) * 100).toFixed(3);
-        return `Momentum too weak (${actual}%, needs at least ${needed}%)`;
-      }
-      const spreadMatch = code.match(/^spread=([-\d.]+)>([-\d.]+)$/);
-      if (spreadMatch) {
-        const actual = (parseFloat(spreadMatch[1]) * 100).toFixed(3);
-        const limit = (parseFloat(spreadMatch[2]) * 100).toFixed(3);
-        return `Bid-ask spread too wide (${actual}%, max ${limit}%)`;
-      }
-      const scoreMatch = code.match(/^score=([-\d.]+)<([-\d.]+)/);
-      if (scoreMatch) {
-        const actual = parseFloat(scoreMatch[1]).toFixed(4);
-        const needed = parseFloat(scoreMatch[2]).toFixed(4);
-        return `Entry score too low (${actual}, needs ${needed})`;
-      }
-      if (code === "passed_filters(unexpected)") return "Passed all filters (unexpected \u2014 may have entered)";
-      return code; // fallback: show raw
-    }
-
-    function translateBlocker(blockerText) {
-      const b = blockerText.replace("Blocker: ", "").trim();
-      if (b.includes("halt_new_entries=True")) return "New entries are paused (halted from dashboard or risk limit).";
-      if (b.includes("ENTRY_PENDING")) return "Waiting for a limit buy order to fill or time out.";
-      if (b.includes("EXIT_PENDING")) return "Waiting for a sell order to complete.";
-      if (b.includes("Market data stale")) return "Market data is stale \u2014 the latest bar is too old. The bot is waiting for fresh data before evaluating signals. This is normal outside market hours.";
-      if (b.includes("Opening range delay")) {
-        const m = b.match(/(\d+)m/);
-        return `Waiting for the opening range delay (${m ? m[1] + " minutes" : "a few minutes"} after market open).`;
-      }
-      if (b.includes("min_seconds_between_entry_orders")) return "Cooling down between entry attempts.";
-      if (b.includes("max_open_positions reached")) return "Already at the maximum number of open positions.";
-      if (b.includes("qty=0")) return "A candidate passed all filters, but position size came out to zero (daily loss limit, insufficient cash, or portfolio cap reached).";
-      if (b.includes("No quote")) return "Found a candidate, but couldn't get a market quote for it.";
-      if (b.includes("Invalid limit_price")) return "Found a candidate, but the bid price was invalid.";
-      return b;
-    }
-
-    function translateNoSymbolsScored(detail) {
-      // e.g. "no_symbols_scored thin_bars<15=1 avg_vol<2000.0=4 bad_past_or_vol=0 no_bars_frame=0"
-      let html = '<div style="color:var(--amber); margin:0.35rem 0; font-weight:600;">No symbols passed initial scoring filters.</div>';
-      const parts = [];
-      const thinMatch = detail.match(/thin_bars<(\d+)=(\d+)/);
-      if (thinMatch && parseInt(thinMatch[2]) > 0) {
-        parts.push(`${thinMatch[2]} symbol(s) have too few bars (need ${thinMatch[1]}+ minute bars of history)`);
-      }
-      const volMatch = detail.match(/avg_vol<([\d.]+)=(\d+)/);
-      if (volMatch && parseInt(volMatch[2]) > 0) {
-        parts.push(`${volMatch[2]} symbol(s) have average volume below ${parseFloat(volMatch[1]).toLocaleString()}`);
-      }
-      const badMatch = detail.match(/bad_past_or_vol=(\d+)/);
-      if (badMatch && parseInt(badMatch[1]) > 0) {
-        parts.push(`${badMatch[1]} symbol(s) have bad price history or zero volume`);
-      }
-      const noFrameMatch = detail.match(/no_bars_frame=(\d+)/);
-      if (noFrameMatch && parseInt(noFrameMatch[1]) > 0) {
-        parts.push(`${noFrameMatch[1]} symbol(s) have no bar data at all`);
-      }
-      if (parts.length) {
-        html += '<div style="margin-top:0.25rem;">';
-        for (const p of parts) {
-          html += `<div style="padding:0.15rem 0;">\u2022 ${p}</div>`;
-        }
-        html += '</div>';
-      }
-      return html;
-    }
-
-    function renderDiagnosticEnglish(msg) {
-      const sections = msg.split(" | ");
-      let html = "";
-      let hasBlocker = false;
-      let headerInfo = null;
-
-      for (const sec of sections) {
-        if (sec.startsWith("Entry diagnostic:")) {
-          // Extract key metrics from header for display
-          const haltMatch = sec.match(/halt_new_entries=(\w+)/);
-          const heldMatch = sec.match(/held=\[([^\]]*)\]/);
-          const portfolioMatch = sec.match(/portfolio.?\$(\d+)\/\$(\d+)/);
-          const roomMatch = sec.match(/room.?\$([\d.]+)/);
-          const cashMatch = sec.match(/cash.?\$([\d.]+)/);
-          headerInfo = {
-            halt: haltMatch ? haltMatch[1] : null,
-            held: heldMatch ? heldMatch[1] : "",
-            invested: portfolioMatch ? portfolioMatch[1] : null,
-            cap: portfolioMatch ? portfolioMatch[2] : null,
-            room: roomMatch ? roomMatch[1] : null,
-            cash: cashMatch ? cashMatch[1] : null,
-          };
-          continue;
-        }
-        if (sec.startsWith("Blocker:")) {
-          hasBlocker = true;
-          html += `<div style="color:var(--amber); margin:0.35rem 0; font-weight:600;">${translateBlocker(sec)}</div>`;
-        }
-        if (sec.startsWith("Detail:")) {
-          const detail = sec.replace("Detail: ", "").trim();
-
-          // Handle no_symbols_scored with sub-reasons
-          if (detail.startsWith("no_symbols_scored")) {
-            html += translateNoSymbolsScored(detail);
-            continue;
-          }
-
-          // Handle scoring_bars_unavailable
-          if (detail.includes("scoring_bars_unavailable")) {
-            html += `<div style="color:var(--amber); margin:0.35rem 0; font-weight:600;">Could not fetch market data for scoring \u2014 check API connection or market data subscription.</div>`;
-            continue;
-          }
-
-          const tokens = detail.split(/\s+/);
-          // check for SPY global blocker
-          const spyBlock = tokens.find(t => t === "SPY_market_filter_not_uptrend(blocks_all)");
-          if (spyBlock) {
-            html += `<div style="color:var(--amber); margin:0.35rem 0 0.2rem; font-weight:600;">The broad market (SPY) is trending down \u2014 all new entries are blocked.</div>`;
-          }
-          // per-symbol reasons
-          const symReasons = tokens.filter(t => t.includes(":") && !t.startsWith("SPY_market"));
-          if (symReasons.length) {
-            html += '<div style="margin-top:0.3rem;">';
-            for (const tok of symReasons) {
-              const colonIdx = tok.indexOf(":");
-              const sym = tok.substring(0, colonIdx);
-              const code = tok.substring(colonIdx + 1);
-              const reason = translateSymbolReason(sym, code);
-              html += `<div style="padding:0.2rem 0; display:flex; align-items:baseline; gap:0.5rem;">` +
-                `<span style="color:var(--accent); font-weight:600; font-family:var(--font-mono); min-width:3rem;">${sym}</span>` +
-                `<span>${reason}</span></div>`;
-            }
-            html += '</div>';
-          }
-        }
-      }
-
-      // Show header summary
-      if (headerInfo) {
-        let summary = '<div style="margin-top:0.4rem; padding:0.4rem 0.5rem; background:var(--surface); border-radius:4px; font-size:0.75rem; color:var(--muted);">';
-        const items = [];
-        if (headerInfo.held) items.push(`Holding: ${headerInfo.held}`);
-        else items.push("Holding: none");
-        if (headerInfo.invested && headerInfo.cap) items.push(`Invested: $${parseInt(headerInfo.invested).toLocaleString()} / $${parseInt(headerInfo.cap).toLocaleString()}`);
-        if (headerInfo.room) items.push(`Room: $${parseInt(headerInfo.room).toLocaleString()}`);
-        if (headerInfo.cash) items.push(`Cash: $${parseFloat(headerInfo.cash).toLocaleString()}`);
-        summary += items.join(' &middot; ');
-        summary += '</div>';
-        html += summary;
-      }
-
-      // If only the header was present (no Blocker, no Detail)
-      if (!html) {
-        html = '<span style="color:var(--muted);">No candidates met entry criteria.</span>';
-      }
-      return html;
-    }
-
-    function renderWarnings(warnings) {
-      if (!warnings || !warnings.length) return "";
-      let html = '<div style="margin-top:0.5rem; border-top:1px solid var(--border); padding-top:0.4rem;">';
-      html += '<div style="font-size:0.7rem; color:var(--muted); margin-bottom:0.25rem; font-weight:600;">Recent Warnings</div>';
-      for (const w of warnings) {
-        let msg = w.message;
-        if (msg.includes("Market data stale")) {
-          const ageMatch = msg.match(/(\d+)s old/);
-          const age = ageMatch ? ageMatch[1] : "?";
-          msg = `Market data is stale (${age}s old). This typically means the market is closed or the data feed is down.`;
-        } else if (msg.includes("Loop quotes fetch failed")) {
-          msg = "Failed to fetch latest quotes from broker API.";
-        }
-        html += `<div style="padding:0.15rem 0; font-size:0.75rem;"><span style="color:var(--muted); font-size:0.65rem;">${w.ts}</span> <span style="color:var(--amber);">${msg}</span></div>`;
-      }
-      html += '</div>';
-      return html;
-    }
-
-    async function loadNoTradeReasons(force) {
-      const now = Date.now();
-      if (!force && (now - lastNoTradeLoad) < NO_TRADE_INTERVAL_MS) return;
-      lastNoTradeLoad = now;
-      try {
-        const j = await fetchJson("/api/no-trade-reasons");
-        const list = $("no-trade-list");
-        const reasons = j.reasons || [];
-        const warnings = j.warnings || [];
-        if (!reasons.length && !warnings.length) {
-          list.innerHTML = '<span style="color:var(--muted);">No diagnostic entries in log yet.</span>';
-          return;
-        }
-        let html = "";
-        if (reasons.length) {
-          // Show most recent diagnostic with full detail
-          const latest = reasons[0];
-          html += `<div style="color:var(--muted); font-size:0.68rem; margin-bottom:0.4rem;">Last checked: ${latest.ts}</div>`;
-          html += renderDiagnosticEnglish(latest.message);
-
-          // Show older diagnostics (collapsed) if reasons changed
-          if (reasons.length > 1) {
-            html += '<details style="margin-top:0.5rem;"><summary style="cursor:pointer; font-size:0.72rem; color:var(--muted);">Previous diagnostics (' + (reasons.length - 1) + ')</summary>';
-            for (let i = 1; i < reasons.length; i++) {
-              const r = reasons[i];
-              html += `<div style="margin-top:0.4rem; padding:0.3rem 0; border-top:1px solid var(--border);">`;
-              html += `<div style="color:var(--muted); font-size:0.65rem; margin-bottom:0.2rem;">${r.ts}</div>`;
-              html += renderDiagnosticEnglish(r.message);
-              html += '</div>';
-            }
-            html += '</details>';
-          }
-        }
-        // Show warnings
-        html += renderWarnings(warnings);
-        list.innerHTML = html;
-      } catch (e) {
-        $("no-trade-list").innerHTML = `<span style="color:var(--red);">Error: ${e.message || e}</span>`;
-      }
-    }
-
-    // Swap positions panel between table and no-trade summary
-    function updateNoTradePanel(posCount) {
-      const tableWrap = $("pos-table-wrap");
-      const noTradeWrap = $("no-trade-wrap");
-      const title = $("pos-panel-title");
-      const tag = $("pos-count-tag");
-      if (posCount === 0) {
-        tableWrap.style.display = "none";
-        noTradeWrap.style.display = "";
-        title.textContent = "No-Trade Summary";
-        tag.textContent = "no positions";
-        loadNoTradeReasons(false);
-      } else {
-        tableWrap.style.display = "";
-        noTradeWrap.style.display = "none";
-        title.textContent = "Open Positions";
-        tag.textContent = posCount + " open";
-      }
-    }
-
-    // ---------- orchestration ----------
-    function setMsg(text, cls) {
-      const el = $("action-msg");
-      el.textContent = text || "";
-      el.className = "msg-line" + (cls ? " " + cls : "");
-    }
-
-    async function refreshAll() {
-      try {
-        await Promise.all([loadStatus(), loadTrades()]);
-      } catch (e) {
-        setMsg("Failed to load: " + (e && e.message ? e.message : e), "err");
-      }
-    }
-
-    $("btn-refresh").onclick = () => { setMsg("Refreshing…"); lastNoTradeLoad = 0; refreshAll().then(() => setMsg("")); };
-
-    $("btn-resume").onclick = async () => {
-      $("btn-resume").disabled = true;
-      try {
-        const r = await fetch("/api/resume-entries", { method: "POST" });
-        const j = await r.json();
-        setMsg(j.ok ? (j.message || "OK") : (j.error || "Error"), j.ok ? "ok" : "err");
-      } catch (e) { setMsg(String(e), "err"); }
-      finally { $("btn-resume").disabled = false; setTimeout(refreshAll, 500); }
-    };
-
-    $("btn-start").onclick = async () => {
-      $("btn-start").disabled = true;
-      try {
-        const r = await fetch("/api/start", { method: "POST" });
-        const j = await r.json();
-        setMsg(j.ok ? (j.message || "OK") : (j.error || "Error"), j.ok ? "ok" : "err");
-      } catch (e) { setMsg(String(e), "err"); }
-      finally { $("btn-start").disabled = false; setTimeout(refreshAll, 1500); }
-    };
-
-    $("btn-stop").onclick = async () => {
-      if (!confirm("Stop bot, cancel orders, and market-sell open positions?")) return;
-      $("btn-stop").disabled = true;
-      try {
-        const r = await fetch("/api/stop", { method: "POST" });
-        const j = await r.json();
-        setMsg(j.ok ? (j.message || "OK") : (j.error || "Error"), j.ok ? "ok" : "err");
-      } catch (e) { setMsg(String(e), "err"); }
-      finally { $("btn-stop").disabled = false; setTimeout(refreshAll, 2000); }
-    };
-
-    refreshAll();
-    setInterval(refreshAll, 10000);
-  </script>
+setInterval(updateClock, 1000);
+setInterval(refreshAll, 10000);
+updateClock();
+refreshAll();
+</script>
 </body>
 </html>

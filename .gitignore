@@ -129,3 +129,11 @@ cython_debug/
 
 # State
 state.json
+app/research/data/
+
+# Backtest artifacts
+app/backtest/cache/
+app/backtest/out/
+
+# Raw scratch dumps from analysis runs (superseded by docs/log_analysis.md)
+app/research/_run.txt

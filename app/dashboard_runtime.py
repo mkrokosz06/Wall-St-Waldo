@@ -13,8 +13,12 @@ from alpaca_client import AlpacaTradingREST
 from config import load_config, resolve_bot_log_path
 
 
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def pick_env_path() -> str:
-    return ".env" if os.path.exists(".env") else ".env.example"
+    env = os.path.join(_APP_DIR, ".env")
+    return env if os.path.exists(env) else os.path.join(_APP_DIR, ".env.example")
 
 
 def read_lock_pid(lock_path: str) -> str:
@@ -106,7 +110,7 @@ def get_snapshot() -> Dict[str, Any]:
     """Unified status for dashboard / API."""
     load_dotenv(dotenv_path=pick_env_path(), override=True)
     cfg = load_config()
-    lock_path = os.getenv("BOT_LOCK_PATH", "bot.lock")
+    lock_path = os.getenv("BOT_LOCK_PATH", os.path.join(_APP_DIR, "bot.lock"))
     pid = read_lock_pid(lock_path)
     running = pid_is_running(pid)
     state = read_state(cfg.state_path)
