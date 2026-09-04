@@ -137,3 +137,9 @@ app/backtest/out/
 
 # Raw scratch dumps from analysis runs (superseded by docs/log_analysis.md)
 app/research/_run.txt
+
+# Runtime artefacts
+app/bot.lock
+bot.lock
+app/state.json.bak-*
+state.json.bak-*
