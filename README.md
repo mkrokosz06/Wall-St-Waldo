@@ -115,8 +115,8 @@ Full list in `app/.env.example`. The ones that change behaviour most:
 | Variable | Current | Notes |
 |---|---|---|
 | `SYMBOLS_UNIVERSE` | `TQQQ,SOXL` | Inverse and vol ETFs were removed — see findings |
-| `STOP_LOSS_PCT` | `0.006` | Flat across instruments; this is a known weakness |
-| `TAKE_PROFIT_PCT` | `0.012` | |
+| `STOP_LOSS_PCT` | `0.015` | Flat across instruments; ATR-scaling is open work |
+| `TAKE_PROFIT_PCT` | `0.035` | Chosen on the current regime, not the full sample |
 | `MAX_OPEN_POSITIONS` | `2` | |
 | `MAX_RISK_PER_TRADE` | `5.0` | Sized for a $100 account |
 | `MAX_DAILY_REALIZED_LOSS` | `-200` | Must be negative; kill switch |
@@ -145,8 +145,9 @@ these are fixed; each was found by analysing `bot.log`, not by reading code.
 - **Fractional order quantities.** `_compute_qty_for_entry` returned a rounded
   float and fed it to a limit buy — 647 HTTP 422 rejections. The fractional
   fills that did get through could not carry a broker stop, which forced an
-  in-loop synthetic stop that exited ~10x wider than intended. One missing
-  `floor()` caused all of it.
+  in-loop synthetic stop that checked only on the 10-second poll and so exited
+  wide of its trigger — averaging -$6.03 against an intended $4.89 on ~$815 of
+  notional, about a 23% overshoot. One missing `floor()` caused all of it.
 - **808 positions held with no protective stop**, because a failed stop
   placement returned early without recording the leg.
 - **Accidental overnight holds produced 86% of all realised P&L.** The

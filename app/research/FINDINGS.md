@@ -89,8 +89,15 @@ significance:
    Disabling it improves the backtest by $7 and, at wider stops, by much more.
 
 2. **The synthetic stop is far worse than the real one.** Live, exits tagged
-   `stop_loss_synthetic` average **-$6.03** per loss on a ~$100 account. A 0.6%
-   stop on a $100 position should lose about $0.60. This is a ten-fold overshoot.
+   `stop_loss_synthetic` average **-$6.03** per loss. [**Corrected 2026-09-15:**
+   this paragraph originally compared that to a $0.60 intended loss and called it
+   a ten-fold overshoot. That was wrong — it assumed ~$100 of notional. The 207
+   `ENTRY filled` lines in `app/bot.log` average **$815.25** of notional (min
+   $98.94, max $834.06), because the fractional/notional entry path sized to
+   roughly $833 rather than to the account. A 0.6% stop on $815 is an intended
+   loss of **$4.89**, so -$6.03 is a **~23% overshoot, not 10x.** The synthetic
+   stop is still worse than a broker stop, and still worth removing, but it is
+   not the catastrophic defect this section originally claimed.]
    The synthetic stop is the in-loop fallback used when Alpaca rejects a stop
    order on a fractional position (`use_notional_market_entry=True`), and it only
    checks on the 10-second poll — so it exits at whatever the price is by the
@@ -353,7 +360,8 @@ Ordered by expected value, and honest about which are supported.
    Significant loser in the backtest (1,695 trades) and in the live log
    (t = -4.89). This is the clearest single result in the whole study.
 2. **Stop using notional/fractional entries, or fix the synthetic stop.** Live
-   synthetic-stop exits lose $6.03 each against an intended $0.60 risk. Either
+   synthetic-stop exits lose $6.03 each against an intended $4.89 risk (see the
+   correction above; an earlier version of this line said $0.60). Either
    size to whole shares so Alpaca accepts a real stop order, or make the
    synthetic stop check on every quote rather than on the 10-second poll.
 3. **Drop UVXY, and probably SOXS and SQQQ, from a long-only universe.** They
