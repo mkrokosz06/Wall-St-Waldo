@@ -486,3 +486,171 @@ is what would restore breadth.
 - Whether a *different* entry signal has edge. Nothing here tests one; it only
   establishes that this one does not.
 - Anything about short entries. The bot is long-only and so is the backtest.
+
+---
+
+# Addendum, 2026-09-15: the affordability constraint
+
+Written after a second study aimed specifically at profitability. Reproduce
+with the scripts referenced inline; `wf_SOXL.csv` and `wf_TQQQ_SOXL.csv` in
+this directory are the walk-forward outputs.
+
+## The finding that reframes everything
+
+**A $100 account could not buy one share of SOXL for 54.4% of the sample.**
+
+| month end | SOXL close | 1 share affordable? |
+|---|---|---|
+| 2026-01-31 | 62.07 | yes |
+| 2026-02-28 | 62.20 | yes |
+| 2026-03-31 | 49.24 | yes |
+| 2026-04-30 | 124.50 | **no** |
+| 2026-05-31 | 223.21 | **no** |
+| 2026-06-30 | 269.25 | **no** |
+| 2026-07-31 | 112.66 | **no** |
+| 2026-08-31 | 112.89 | **no** |
+
+SOXL first closed above $100 on **2026-04-21**. Whole-share sizing plus a $100
+account means every SOXL result in the original study is earned in the first
+16 weeks, and **none of it is reachable today** at SOXL $112.
+
+This shows up directly in the SOXL walk-forward: folds 5–10 and 12–14 execute
+**zero out-of-sample trades**. Not a bad result — no result. The instrument had
+priced itself out of the account.
+
+So the live bot is, right now, a **TQQQ-only bot**. And TQQQ has no profitable
+configuration: over a 5×4 grid of stop × target it is negative in **19 of 20
+cells**, best cell +$2.32.
+
+## Splitting the sample splits the answer
+
+TQQQ+SOXL, $100, fixed configs, no per-fold selection. H1 is the affordable-SOXL
+regime; H2 is the current one.
+
+| config | R:R | H1 Jan–Apr | H2 May–Sep | full | win % (full) |
+|---|---|---|---|---|---|
+| 0.006 / 0.012 (live before) | 2.0 | -7.70 | **-23.77** | -28.02 | 34.2 |
+| 0.015 / 0.012 | 0.8 | +16.92 | -4.49 | +6.85 | **55.0** |
+| 0.020 / 0.020 | 1.0 | +5.89 | -10.57 | -4.68 | 50.9 |
+| **0.015 / 0.035** | **2.3** | **+19.59** | **-2.18** | **+8.32** | 41.0 |
+| 0.015 / 0.060 | 4.0 | +32.94 | -3.89 | +27.19 | 39.4 |
+
+Every candidate is positive in H1 and negative in H2. The full-sample profit of
+the wide-target configs is **entirely** the first four months. Any single number
+quoted over the whole sample is averaging two different regimes, one of which
+no longer exists.
+
+## What was actually adopted
+
+`STOP_LOSS_PCT` 0.006 → **0.015**, `TAKE_PROFIT_PCT` 0.012 → **0.035**.
+
+Chosen on H2 — the regime the bot is in — not on the full sample:
+
+- Best H2 of any candidate: **-$2.18** against the previous config's **-$23.77**.
+  On a $100 account that is roughly breakeven instead of losing a quarter of
+  the account in four months.
+- **Insensitive to execution assumptions**, which the previous config was not
+  and the wide-target ones are not: H1 +19.59 / +19.92 / +21.78 and H2 -2.18 /
+  -2.03 / -3.04 at 2 / 4 / 10 bp of spread. It gets *better* with wider spreads
+  because wider spreads suppress marginal entries. By contrast 0.015/0.060
+  decays from +27.19 to +10.66 across the same range — most of its edge lives
+  in the tight-spread assumption, which the live log says is false.
+- Drawdown -25.1% against -32.1%.
+
+0.015/0.060 has the better headline (+$27.19) and was **not** chosen: its
+advantage is H1-only, it halves under realistic spreads, and its 4:1 target on
+a 10-minute horizon means the exit is mostly the end-of-day flatten.
+
+**This is not a profitable configuration. It is a configuration that stops
+losing.** The entry signal is the same coin flip measured at the top of this
+document.
+
+## The high-win-rate corner, and a validation bug that hid it
+
+`config.py` raised `ValueError` whenever `stop_loss_pct >= take_profit_pct`, on
+the reasoning that "the stop will always trigger before the take-profit". That
+made the entire reward-to-risk-below-1:1 half of the parameter space
+unreachable — including, it turns out, the part the walk-forward optimizer keeps
+choosing. Now a warning.
+
+For a zero-edge signal, win rate is not a quality measure, it is a restatement
+of the geometry: `P(win) ≈ stop / (stop + target)`. Measured, on TQQQ:
+
+| stop / target | R:R | win rate |
+|---|---|---|
+| 0.006 / 0.012 | 2.0 | 34.8% |
+| 0.010 / 0.012 | 1.2 | 45.0% |
+| 0.015 / 0.012 | 0.8 | 54.4% |
+| 0.020 / 0.012 | 0.6 | 57.6% |
+| 0.025 / 0.012 | 0.5 | 59.3% |
+
+Dialling win rate to any target is trivial and means nothing on its own — the
+average win shrinks exactly as fast as the hit rate climbs. **0.015/0.012 does
+hold 54–55% in every sub-period and at every spread assumption** (H1 55.8%, H2
+54.2%, full 55.0%) at roughly breakeven, so it is the honest answer if a high
+hit rate is wanted for its own sake. It is not the profit-maximising choice.
+
+## The SOXL profit was drift, and worse than holding
+
+The original study's best SOXL cell (0.015/0.060, +$43.84, PF 1.137) does not
+survive its control:
+
+| SOXL, 0.015 / 0.060 | P&L | win rate |
+|---|---|---|
+| real entry signal | +43.84 | 34.3% |
+| random entries, 8 seeds | +19.66 (sd 18.11) | 36.5% |
+| **one share held all sample** | **+70.87** | — |
+
+The signal is **+0.41 sd** from random; across the four best cells, +0.07 to
++1.11 sd. SOXL rose **+168.7%** over the sample, so any long-only rule on it
+makes money. The bot captured $44 of the $71 available from simply holding one
+share, and paid 361 spreads to underperform it.
+
+Reproduce: the control harness is `research.controls`; the per-cell grid is a
+`dataclasses.replace` loop over `stop_loss_pct` × `take_profit_pct`.
+
+## Walk-forward: better than the first study, and worth understanding why
+
+TQQQ+SOXL, 16-cell stop × target grid, 42-day train / 14-day test:
+
+| | in-sample | out-of-sample |
+|---|---|---|
+| total P&L | +96.24 | **+8.72** |
+| expectancy | +0.084 | **+0.072** |
+| win rate | 47.7% | **49.5%** |
+| profit factor | 1.205 | 1.421 |
+| folds positive | — | **10 / 16** |
+
+The original study's 192-combination grid over five parameters gave +442
+in-sample against **-60** out-of-sample, 3/15 folds positive. This 16-cell grid
+over two parameters gives in-sample and out-of-sample expectancy that nearly
+match (+0.084 vs +0.072). That difference is the searching, not the strategy:
+a smaller grid has less room to fit noise. It is evidence that **the geometry
+is a real, stable effect while the entry parameters were noise** — consistent
+with the ablations, the volatility measurements and the live log.
+
+It is not evidence of profitability. +$8.72 over eight months on a $100 account
+is indistinguishable from zero, and fold 8 alone contributes -$15.79.
+
+## What would actually change the outcome
+
+Ordered by expected value. None of these is a parameter.
+
+1. **More capital, or cheaper instruments.** At $100 the tradeable universe is
+   whatever costs under ~$100 a share, which today is TQQQ alone, which loses in
+   19 of 20 configurations. This is the binding constraint on everything else
+   and no amount of tuning reaches past it. Scaling equity does not fix it by
+   itself — at $500/$1000/$5000 the 0.015/0.060 config returns +27.9% / +19.8% /
+   +28.2%, but that is the same H1 SOXL drift, now merely affordable.
+2. **A different entry signal, tested against `research.controls` before
+   anything else.** The current one is a coin flip; every result above is a
+   statement about exits and sizing.
+3. **Stop trading these instruments long-only.** SOXL's +169% is the only reason
+   any configuration shows a profit, and capturing drift badly is worse than
+   holding.
+
+## What this addendum does not change
+
+Everything under "What this study cannot tell you" above still applies — one
+regime, modelled rather than measured costs, and the SIP/IEX split between
+backtest and live.

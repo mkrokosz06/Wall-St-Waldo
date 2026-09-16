@@ -244,10 +244,23 @@ class BotConfig:
                 "Set e.g. MAX_DAILY_REALIZED_LOSS=-20"
             )
 
-        if self.stop_loss_pct >= self.take_profit_pct:
+        if self.take_profit_pct <= 0:
             raise ValueError(
-                f"stop_loss_pct ({self.stop_loss_pct}) >= take_profit_pct ({self.take_profit_pct}). "
-                "The stop will always trigger before the take-profit — fix your risk/reward settings."
+                f"take_profit_pct must be > 0 (got {self.take_profit_pct})."
+            )
+
+        if self.stop_loss_pct >= self.take_profit_pct:
+            # Not an error. A target tighter than the stop is the high-win-rate /
+            # low-payoff corner of the geometry, and it is a legitimate setting to
+            # run or to measure. It was a hard failure here until 2026-09-15, which
+            # made the whole R:R < 1 half of the parameter space unreachable.
+            _log.warning(
+                "Config warning: stop_loss_pct (%.4f) >= take_profit_pct (%.4f), i.e. "
+                "reward-to-risk %.2f:1. Expect a high win rate and a low average win; "
+                "the spread is then a larger share of each winner.",
+                self.stop_loss_pct,
+                self.take_profit_pct,
+                self.take_profit_pct / self.stop_loss_pct,
             )
 
         if self.momentum_lookback_minutes > self.bars_lookback_minutes_for_scoring:

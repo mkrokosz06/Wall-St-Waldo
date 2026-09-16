@@ -143,3 +143,7 @@ app/bot.lock
 bot.lock
 app/state.json.bak-*
 state.json.bak-*
+
+# .env backups (contain credentials)
+.env.bak*
+app/.env.bak*
