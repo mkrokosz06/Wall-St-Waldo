@@ -161,6 +161,12 @@ class BotConfig:
     # behaviour; pass enforce_max_entry_attempts=True there to model the cap).
     #
     # Set MAX_ENTRY_ATTEMPTS_PER_DAY=0 to keep the previous unlimited behaviour.
+    # Max age of a quote used to size or submit an entry. Separate from
+    # stale_data_max_age_sec, which governs *bars*: a bar is published 60-90s
+    # after its minute closes, so it needs a tolerance measured in minutes,
+    # while a quote that old is useless for pricing an order.
+    quote_stale_max_age_sec: int = 30
+
     max_entry_attempts_per_day: int = 3
     # INFO log every N seconds summarizing why no buy (0 = disable). Helps explain "silent" sessions.
     entry_diagnostic_interval_sec: int = 180
@@ -289,6 +295,31 @@ class BotConfig:
                 self.stop_loss_pct,
             )
 
+        if self.quote_stale_max_age_sec <= 0:
+            raise ValueError(
+                f"quote_stale_max_age_sec must be > 0 (got {self.quote_stale_max_age_sec})"
+            )
+
+        if self.stale_data_max_age_sec <= 0:
+            raise ValueError(
+                f"stale_data_max_age_sec must be > 0 (got {self.stale_data_max_age_sec})"
+            )
+
+        if self.stop_loss_pct <= 0:
+            raise ValueError(
+                f"stop_loss_pct must be > 0 (got {self.stop_loss_pct}); a zero or "
+                "negative stop distance cannot size a position"
+            )
+
+        if self.enable_extended_hours and self.enable_trailing_stop:
+            # A sell limit below market is marketable, not conditional, so the
+            # extended-hours exit path cannot stand in for a protective stop.
+            _log.warning(
+                "Config warning: extended hours with trailing stops is not a tested "
+                "combination. The extended-hours exit uses a sell LIMIT, which is "
+                "marketable rather than conditional, so it is not protection."
+            )
+
         if self.max_entry_attempts_per_day < 0:
             raise ValueError(
                 f"max_entry_attempts_per_day must be >= 0 (got {self.max_entry_attempts_per_day}); "
@@ -356,6 +387,7 @@ def load_config() -> BotConfig:
         post_loss_extra_cooldown_sec=_env_int("POST_LOSS_EXTRA_COOLDOWN_SEC", 150),
         min_seconds_between_entry_orders=_env_int("MIN_SECONDS_BETWEEN_ENTRY_ORDERS", 2),
         entry_diagnostic_interval_sec=_env_int("ENTRY_DIAGNOSTIC_INTERVAL_SEC", 180),
+        quote_stale_max_age_sec=_env_int("QUOTE_STALE_MAX_AGE_SEC", 30),
         max_entry_attempts_per_day=_env_int("MAX_ENTRY_ATTEMPTS_PER_DAY", 3),
         max_open_positions=_env_int("MAX_OPEN_POSITIONS", 3),
         market_open_delay_minutes=_env_int("MARKET_OPEN_DELAY_MINUTES", 15),

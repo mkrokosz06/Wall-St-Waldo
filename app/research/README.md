@@ -10,6 +10,7 @@ imported by the live bot; `bot.py` and its runtime path are untouched.
 | `data.py` | Alpaca SIP 1-minute bar downloader with a parquet cache |
 | `fastsig.py` | Vectorized precomputation of every per-bar signal |
 | `backtest.py` | Bar-by-bar replay engine (`run_backtest`) |
+| `execution.py` | Named execution/cost models (`spread_aware`, `legacy`, `frictionless`) |
 | `sweep.py` | Grid search + walk-forward validation |
 | `diagnose.py` | Baseline metrics, P&L attribution, one-mechanism-at-a-time ablations |
 | `controls.py` | Coin-flip and zero-cost controls — does the signal beat random? |
@@ -109,6 +110,34 @@ Two bugs found this way, both of which would silently corrupt results:
 - `DatetimeIndex.asi8` returned **microseconds**, not nanoseconds, for
   parquet-loaded bars, silently shifting the momentum reference bar.
 
+## Execution models — read this before comparing any two numbers
+
+Every result carries an execution model, recorded in `result.params`. The
+default is `spread_aware`.
+
+| model | buys | sells | round-trip cost at 10 bp |
+|---|---|---|---|
+| `spread_aware` (default) | ask + slippage | bid - slippage | 0.120% |
+| `legacy` | **slippage only** | bid - slippage | 0.020% |
+| `frictionless` | reference | reference | 0.000% |
+
+`legacy` exists only to reproduce results published before 2026-09-15. It had a
+real defect: the modelled bid/ask was applied to exits but not to entries, so a
+round trip paid about half the spread it should have, and the total cost did not
+move with `spread_bps` at all. Numbers produced under it are optimistic, and a
+config that looks robust to spread under `legacy` has told you nothing — that
+apparent robustness is the defect. See the second addendum in `FINDINGS.md`.
+
+```python
+res = backtest.run_backtest(cfg, bars, 100.0, spread_bps=10.0)   # spread_aware
+res.params["execution_model"]      # 'spread_aware'
+res.params["round_trip_cost_pct"]  # 0.0012
+```
+
+Always re-run anything important at `spread_bps=10` before believing it. The
+live log's 539 `spread_too_wide` rejections fired against a 0.10% gate, so real
+spreads on this universe frequently exceed 10 bp.
+
 ## Approximations vs the live bot
 
 Read `backtest.py`'s module docstring for the full list. The ones that matter:
@@ -145,4 +174,14 @@ Read `backtest.py`'s module docstring for the full list. The ones that matter:
   2 bp model.
 - **Costs are modelled, not measured.** 2 bp of spread is reasonable for TQQQ at
   size; it is optimistic for UVXY and for 1-share orders. Re-run anything
-  important with `spread_bps=4` before believing it.
+  important with `spread_bps=10` before believing it — and check that
+  `result.params["execution_model"]` says `spread_aware`, because under
+  `legacy` the spread argument barely affects the answer.
+- **A limit buy's limit is only enforced under `require_limit_fill=True`.** By
+  default the engine fills the entry at the next bar's open regardless of the
+  submitted limit, because a minute bar cannot establish whether a limit filled
+  inside the live 20-second window. Under `require_limit_fill` a buy can never
+  fill above its limit, slippage included.
+- **Windows:** wrap any script calling `sweep()` or `walk_forward()` in
+  `if __name__ == "__main__":` — the process pool needs it, and without it the
+  workers fail and the run produces nothing.

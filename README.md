@@ -42,7 +42,13 @@ be tested and replayed offline.
 | `app/config.py` | `BotConfig` + `.env` loading and validation |
 | `app/strategy_signals.py` | Entry score, momentum, MA/trend, candlestick helpers |
 | `app/alpaca_client.py` | Broker and market-data wrapper |
-| `app/state_store.py` | Crash-safe JSON state with atomic writes |
+| `app/state_store.py` | Crash-safe JSON state, atomic writes, schema migration |
+| `app/order_ledger.py` | Durable order records and exactly-once fill accounting |
+| `app/protection.py` | Confirmed cancellation and verified stop coverage |
+| `app/session_policy.py` | Trading session, opening delay, closing cutoff |
+| `app/data_validation.py` | Per-symbol bar/quote freshness and sanity |
+| `app/risk_budget.py` | Daily allowance and reserved open risk |
+| `app/tests/` | Offline deterministic suite (fake broker, fake clock) |
 | `app/dashboard_app.py` | Local Flask dashboard (separate process) |
 | `app/research/` | Backtest engine, sweeps, walk-forward, log forensics |
 | `tools/` | `analyze_trades.py`, `mine_trades.py` — log/trade analysis |
@@ -97,7 +103,16 @@ cd app
 python -c "from research import data; data.fetch_minute_bars(['TQQQ','SOXL'],'2026-01-01','2026-09-01')"
 python -m research.diagnose    # baseline, P&L attribution, ablations
 python -m research.controls    # does the signal beat a coin flip?
-python -m pytest research/ -q  # 39 tests
+python -m pytest tests research/test_backtest.py research/test_fastsig.py -q
+```
+
+That is the full offline suite — 184 tests, no network and no credentials. Do
+not collect `test_auth.py` or `test_data_auth.py`: those talk to the real API.
+
+**Execution models matter.** Results carry one, in `result.params`. The default
+`spread_aware` charges the ask on buys and the bid on sells; `legacy` reproduces
+pre-2026-09-15 behaviour, which charged **no spread on entries** and so barely
+responded to `spread_bps` at all. Re-run anything important at `spread_bps=10`.
 ```
 
 See [`app/research/README.md`](app/research/README.md) for the engine's
@@ -116,10 +131,12 @@ Full list in `app/.env.example`. The ones that change behaviour most:
 |---|---|---|
 | `SYMBOLS_UNIVERSE` | `TQQQ,SOXL` | Inverse and vol ETFs were removed — see findings |
 | `STOP_LOSS_PCT` | `0.015` | Flat across instruments; ATR-scaling is open work |
-| `TAKE_PROFIT_PCT` | `0.035` | Chosen on the current regime, not the full sample |
+| `TAKE_PROFIT_PCT` | `0.035` | Loses least under honest costs; still loses |
 | `MAX_OPEN_POSITIONS` | `2` | |
 | `MAX_RISK_PER_TRADE` | `5.0` | Sized for a $100 account |
 | `MAX_DAILY_REALIZED_LOSS` | `-200` | Must be negative; kill switch |
+| `MAX_ENTRY_ATTEMPTS_PER_DAY` | `3` | **Newly enforced** — was dead config. 0 disables |
+| `QUOTE_STALE_MAX_AGE_SEC` | `30` | Quote age limit for entries |
 | `MARKET_OPEN_DELAY_MINUTES` | `5` | Skip the opening auction |
 | `MAX_SPREAD_PCT` | `0.001` | Largest single entry-rejection reason live |
 | `ALPACA_DATA_FEED` | `iex` | See the SIP/IEX asymmetry below |
@@ -170,6 +187,22 @@ these are fixed; each was found by analysing `bot.log`, not by reading code.
 - **A stale-data storm.** Alpaca publishes a 1-minute bar 60-90s after the
   minute closes, against a 90s staleness guard — so the bot spent most of each
   session refusing to evaluate signals. 14,259 warnings. The guard is now 150s.
+- **The backtest never charged the spread on entries.** The modelled bid/ask was
+  applied to exits only, so a round trip paid about half the spread it should
+  have and total cost did not move with `spread_bps`. Results looked robust to
+  transaction costs; they were simply not paying them. Correcting it turns the
+  current config's full-sample +$8.32 into **-$20.48** at a realistic 10bp.
+- **A universe-filtered flatten.** `_flatten_symbols` is called for holdings
+  *outside* the universe but read quantity through a universe-filtered lookup,
+  got zero, cancelled the position's protective orders and sold nothing.
+- **Dead risk config.** `max_entry_attempts_per_day` was defined and its counter
+  incremented, but the two were never compared, so the documented cap did not
+  exist. Same for the daily loss control, which counted only realized losses and
+  ignored risk already committed to open and pending orders.
+- **An empty equity curve.** `record_equity="day"` attached its point to the
+  last bar of each ET date, but out-of-session bars skipped the mark-to-market
+  step — so whenever postmarket bars trailed the session the daily curve came
+  back empty, taking Sharpe and max drawdown with it.
 
 ## Safety notes
 

@@ -91,6 +91,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from research import execution as execution_mod
+
 import sys as _sys
 from pathlib import Path as _Path
 
@@ -330,6 +332,7 @@ def run_backtest(
     slippage_bps: float = 1.0,
     spread_bps: float = 2.0,
     commission_per_order: float = 0.0,
+    execution_model: str = execution_mod.SPREAD_AWARE,
     whole_shares: bool = True,
     require_limit_fill: bool = False,
     enforce_max_entry_attempts: bool = False,
@@ -406,9 +409,26 @@ def run_backtest(
         raise ValueError("no bars to replay")
 
     lookback = int(cfg.bars_lookback_minutes_for_scoring)
-    slip = slippage_bps / 1e4
-    bid_f = 1.0 - (spread_bps / 2.0) / 1e4
-    spread_pct_model = spread_bps / 1e4
+    # One named execution model owns every price adjustment. Before this, the
+    # modelled bid was applied to exits but not to entries, so a round trip paid
+    # about half the spread it should have - which is why published results
+    # barely moved between 2 and 10 bp. See research/execution.py.
+    xm = execution_mod.ExecutionModel(
+        name=execution_model,
+        spread_bps=spread_bps,
+        slippage_bps=slippage_bps,
+        # One fee policy. The engine previously deducted commission_per_order
+        # from cash and 2x from P&L, then also deducted cfg.fee_estimate_per_order
+        # from P&L only - a second fee that never touched cash.
+        fee_per_order=(
+            commission_per_order
+            if commission_per_order
+            else float(getattr(cfg, "fee_estimate_per_order", 0.0) or 0.0)
+        ),
+    )
+    slip = xm.slip
+    bid_f = xm.bid_factor
+    spread_pct_model = xm.spread_pct
 
     open_hh, open_mm = _parse_hhmm(cfg.market_open_time_et)
     close_hh, close_mm = _parse_hhmm(cfg.market_close_time_et)
@@ -695,10 +715,11 @@ def run_backtest(
 
     def _close_leg(leg: _Leg, exit_px: float, exit_ts: pd.Timestamp, reason: str, k: int) -> None:
         nonlocal cash, daily_realized, halt_new_entries
-        proceeds = leg.qty * exit_px - commission_per_order
+        # Charge the fee once, to cash and to P&L, from the same figure. The
+        # entry already paid one fee when it filled, so a round trip pays two.
+        proceeds = leg.qty * exit_px - xm.fee
         cash += proceeds
-        pnl = (exit_px - leg.entry_px) * leg.qty - 2.0 * commission_per_order
-        pnl -= float(cfg.fee_estimate_per_order)
+        pnl = (exit_px - leg.entry_px) * leg.qty - 2.0 * xm.fee
         daily_realized += pnl
         if daily_realized <= cfg.max_daily_realized_loss:
             halt_new_entries = True
@@ -760,6 +781,14 @@ def run_backtest(
             # a session is dropped rather than filled at a stale next-day open.
             pending_entry = None
             pending_exits.clear()
+            # Mark to market before skipping. The daily equity record used to be
+            # attached to the last bar of each ET *date*, but this continue runs
+            # first - so when postmarket bars trailed the session (SIP includes
+            # them) the last bar of the date was out of session, the record was
+            # never written, and record_equity="day" returned an EMPTY curve.
+            if record_equity == "day" and (k + 1 == n or et_date[k + 1] != day):
+                equity_ts.append(now)
+                equity_vals.append(cash + _invested_value())
             continue
 
         # --- 1. fill orders queued on the previous bar, at this bar's open ----
@@ -770,7 +799,7 @@ def run_backtest(
                 if leg is None or s is None or not s.has_bar_at(k):
                     pending_exits.pop(sym, None)
                     continue
-                px = float(s.open[int(s.end_pos[k]) - 1]) * (1.0 - slip)
+                px = xm.sell_fill(float(s.open[int(s.end_pos[k]) - 1]))
                 _close_leg(leg, px, now, reason, k)
                 pending_exits.pop(sym, None)
 
@@ -780,9 +809,19 @@ def run_backtest(
             s = series.get(pe.symbol)
             if s is not None and s.has_bar_at(k) and pe.symbol not in legs:
                 raw_open = float(s.open[int(s.end_pos[k]) - 1])
-                fill = raw_open * (1.0 + slip)
+                fill = xm.buy_fill(raw_open)
                 skip = require_limit_fill and raw_open > pe.limit_px
-                cost = pe.qty * fill + commission_per_order
+                # The limit is only a real constraint in require_limit_fill mode.
+                # By default the engine models the entry as filling at the next
+                # bar's open regardless of the submitted limit - a documented
+                # approximation, because a minute bar cannot establish whether a
+                # limit filled inside the live 20-second window. Under
+                # require_limit_fill the guarantee is enforced strictly: a buy
+                # never fills above its limit, slippage included.
+                if require_limit_fill and not skip:
+                    if xm.cap_buy_at_limit(fill, pe.limit_px) is None:
+                        skip = True
+                cost = pe.qty * fill + xm.fee
                 if not skip and pe.qty > 0 and cost <= cash:
                     cash -= cost
                     legs[pe.symbol] = _Leg(
@@ -814,7 +853,9 @@ def run_backtest(
 
                 # 2a. stop first (conservative intrabar ordering)
                 if b_low <= leg.stop_px:
-                    px = min(leg.stop_px, b_open) * (1.0 - slip)
+                    # A stop is a trigger, not a guaranteed price: if the bar
+                    # gapped below it, the fill is the open.
+                    px = xm.stop_fill(leg.stop_px, b_open, b_low)
                     _close_leg(leg, px, now, "stop", k)
                     continue
 
@@ -822,9 +863,13 @@ def run_backtest(
                 if cfg.enable_take_profit and leg.entry_px > 0:
                     tp_bid_target = leg.entry_px * (1.0 + cfg.take_profit_pct)
                     if b_high * bid_f >= tp_bid_target:
-                        raw_tp = tp_bid_target / bid_f
-                        px = max(raw_tp, b_open) if b_open > raw_tp else raw_tp
-                        px *= 1.0 - slip
+                        # The reference price at which the bid reaches the
+                        # target. Previously this divided the bid factor back
+                        # out and then credited that mid directly, so the exit
+                        # was filled above the bid it was meant to sell at.
+                        raw_tp = tp_bid_target / bid_f if bid_f else tp_bid_target
+                        reference = max(raw_tp, b_open) if b_open > raw_tp else raw_tp
+                        px = xm.sell_fill(reference)
                         _close_leg(leg, px, now, "take_profit", k)
                         continue
 
@@ -888,7 +933,7 @@ def run_backtest(
                         pending_exits[sym] = reason
                     else:
                         # No next bar in the session: settle at this bar's close.
-                        _close_leg(leg, b_close * (1.0 - slip), now, reason, k)
+                        _close_leg(leg, xm.sell_fill(b_close), now, reason, k)
 
         # --- 3. entry scan ----------------------------------------------------
         can_enter = (
@@ -924,7 +969,13 @@ def run_backtest(
         if record_equity == "bar":
             equity_ts.append(now)
             equity_vals.append(equity)
-        elif record_equity == "day" and (k + 1 == n or et_date[k + 1] != day):
+        elif record_equity == "day" and (
+            k + 1 == n
+            or et_date[k + 1] != day
+            # Also record on the last *in-session* bar of the day, so a session
+            # followed by postmarket bars still produces exactly one point.
+            or not (et_weekday[k + 1] < 5 and open_min <= int(et_minute[k + 1]) <= session_end_min)
+        ):
             equity_ts.append(now)
             equity_vals.append(equity)
 
@@ -937,7 +988,7 @@ def run_backtest(
             s = series[sym]
             e = int(s.end_pos[k])
             px = float(s.close[e - 1]) if e > 0 else leg.entry_px
-            _close_leg(leg, px * (1.0 - slip), now, "end_of_data", k)
+            _close_leg(leg, xm.sell_fill(px), now, "end_of_data", k)
         if equity_vals:
             equity_vals[-1] = cash
 
@@ -951,6 +1002,8 @@ def run_backtest(
         params={
             "start_equity": start_equity,
             "slippage_bps": slippage_bps,
+            **xm.manifest(),
+            "round_trip_cost_pct": xm.round_trip_cost_pct(),
             "spread_bps": spread_bps,
             "commission_per_order": commission_per_order,
             "whole_shares": whole_shares,

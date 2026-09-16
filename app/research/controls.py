@@ -51,6 +51,51 @@ import config as cfg_mod  # noqa: E402
 from research import backtest, data, diagnose  # noqa: E402
 
 
+# Eight seeds, matching what FINDINGS.md reports.
+RANDOM_SEEDS = (1, 2, 3, 4, 5, 6, 7, 8)
+
+
+def calibrate_random_rate(
+    base_cfg,
+    bars,
+    target_trades: int,
+    *,
+    seed: int = 0,
+    tolerance: float = 0.08,
+    max_iter: int = 12,
+) -> tuple:
+    """
+    Find the random entry rate that reproduces ``target_trades``.
+
+    Bisection on the rate, because trade count rises monotonically with it. The
+    point is comparability: a control must take a similar number of trades, and
+    therefore carry similar exposure and pay similar costs, before its P&L can
+    be set against the real signal's.
+
+    Returns ``(rate, achieved_trades)``. Falls back to the closest rate found if
+    the tolerance cannot be met within ``max_iter``.
+    """
+    lo, hi = 0.0005, 0.5
+    best = (0.01, -1)
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2.0
+        res = backtest.run_backtest(
+            base_cfg, bars, 100.0,
+            random_entry_seed=seed,  # type: ignore[call-arg]
+            random_entry_rate=mid,  # type: ignore[call-arg]
+        )
+        n = int(res.metrics["trade_count"])
+        if best[1] < 0 or abs(n - target_trades) < abs(best[1] - target_trades):
+            best = (mid, n)
+        if target_trades > 0 and abs(n - target_trades) <= tolerance * target_trades:
+            return mid, n
+        if n < target_trades:
+            lo = mid
+        else:
+            hi = mid
+    return best
+
+
 def _row(name: str, res: backtest.BacktestResult) -> Dict[str, Any]:
     m = res.metrics
     return {
@@ -70,7 +115,9 @@ def main() -> int:
     base = cfg_mod.load_config()
     rows: List[Dict[str, Any]] = []
 
-    rows.append(_row("baseline", backtest.run_backtest(base, bars, 100.0)))
+    baseline_res = backtest.run_backtest(base, bars, 100.0)
+    rows.append(_row("baseline", baseline_res))
+    df_baseline_n = int(baseline_res.metrics["trade_count"])
     rows.append(
         _row(
             "zero_cost",
@@ -95,9 +142,26 @@ def main() -> int:
     rows.append(_row("no_entry_filters", backtest.run_backtest(nofilter, bars, 100.0)))
 
     # Randomized controls: same machinery, entry decision replaced by a coin flip.
-    for seed in (1, 2, 3, 4, 5):
+    #
+    # Count-matched. An unmatched control is not a fair comparison: a coin flip
+    # that takes 200 trades against a signal that takes 360 is being judged on
+    # different exposure, and raw P&L then says more about trade count than
+    # about edge. calibrate_random_rate finds the entry rate that reproduces the
+    # real signal's trade count before the comparison is made.
+    #
+    # FINDINGS.md described this as "8 seeds, count-matched" while the code ran
+    # 5 seeds at a fixed rate and matched nothing. Both are now true.
+    real_n = int(df_baseline_n)
+    rate, achieved = calibrate_random_rate(base, bars, real_n)
+    print(
+        f"count-matching: target {real_n} trades -> random_entry_rate={rate:.4f} "
+        f"produces ~{achieved} (seed 0)"
+    )
+    for seed in RANDOM_SEEDS:
         res = backtest.run_backtest(
-            base, bars, 100.0, random_entry_seed=seed  # type: ignore[call-arg]
+            base, bars, 100.0,
+            random_entry_seed=seed,  # type: ignore[call-arg]
+            random_entry_rate=rate,  # type: ignore[call-arg]
         )
         rows.append(_row(f"random_entry_seed{seed}", res))
 

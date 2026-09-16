@@ -662,3 +662,117 @@ Ordered by expected value. None of these is a parameter.
 Everything under "What this study cannot tell you" above still applies — one
 regime, modelled rather than measured costs, and the SIP/IEX split between
 backtest and live.
+
+---
+
+# Addendum 2, 2026-09-15: the backtest was not charging the spread
+
+This addendum **corrects the addendum above it.** The engine had an execution
+defect that made every result in this document optimistic, and made one specific
+claim of mine exactly backwards.
+
+## The defect
+
+Entries filled at `next_open * (1 + slippage)`. The modelled bid/ask existed —
+`bid_f` was computed from `spread_bps` — but it was applied only to *exits*. A
+round trip therefore paid roughly half the modelled spread instead of all of it.
+Three smaller faults rode along:
+
+- **Take-profit exits credited the mid, not the bid.** The trigger was computed
+  correctly on the bid (`b_high * bid_f >= target`) and then immediately undone
+  with `raw_tp = target / bid_f`, crediting a price above the bid it was supposed
+  to have sold at.
+- **Stops used slippage only**, with no bid side, and assumed the stop price
+  rather than modelling gap-through.
+- **Two different fees.** `_close_leg` took `commission_per_order` from cash and
+  `2 * commission_per_order` from P&L, then took `cfg.fee_estimate_per_order`
+  from P&L as well — a second fee that never touched cash. Both default to 0.0,
+  so nothing was wrong in practice, but cash and realized P&L could not both be
+  right once either was set.
+
+Fixed in `research/execution.py`, which defines named models. `spread_aware` is
+now the default: buys on the ask, sells on the bid, both plus adverse slippage,
+one fee charged once. `legacy` reproduces the old behaviour exactly so every
+number printed above stays reproducible — **every result before this addendum
+was produced under `legacy`.**
+
+## What I got wrong
+
+I wrote, one addendum above, that 0.015/0.035 was **"insensitive to execution
+assumptions"** and cited H2 of -2.18 / -2.03 / -3.04 at 2 / 4 / 10 bp. I then
+used that stability as the main reason to prefer it over 0.015/0.060.
+
+That insensitivity *was the bug.* Under `legacy` the round-trip cost is 0.020%
+no matter what `spread_bps` says, because only slippage was ever charged:
+
+| model | round-trip cost at 2 bp | at 10 bp |
+|---|---|---|
+| `legacy` | 0.020% | **0.020%** |
+| `spread_aware` | 0.040% | **0.120%** |
+
+A strategy trading 1,370 times in eight months cannot be indifferent to a
+fivefold change in transaction costs. It was indifferent because four fifths of
+the cost was never charged. I read a broken cost model as evidence of
+robustness, which is the opposite of what it was.
+
+## The corrected numbers
+
+TQQQ+SOXL, $100, full sample:
+
+| config | model | 2 bp | 10 bp |
+|---|---|---|---|
+| 0.006/0.012 (old live) | legacy | -28.02 | -27.83 |
+| 0.006/0.012 (old live) | **spread_aware** | **-29.18** | **-52.91** |
+| 0.015/0.035 (current) | legacy | +8.32 | +9.67 |
+| 0.015/0.035 (current) | **spread_aware** | **+2.90** | **-20.48** |
+| 0.015/0.060 | legacy | +27.19 | +10.66 |
+| 0.015/0.060 | **spread_aware** | **+9.77** | **-14.07** |
+| 0.015/0.012 | legacy | +6.85 | -2.69 |
+| 0.015/0.012 | **spread_aware** | **-10.43** | **-27.90** |
+
+Two conclusions, and they point in opposite directions:
+
+1. **The widening still helps, and by a lot.** At a realistic 10 bp the old
+   config loses **-$52.91** and the current one loses **-$20.48**. Cutting the
+   loss by 61% is a real improvement and the reason to keep the change.
+2. **It is not near breakeven, which is what I claimed.** "Roughly breakeven
+   instead of losing a quarter of the account" was an artifact of the uncharged
+   spread. At 10 bp the current config loses about a fifth of a $100 account
+   over eight months. **No configuration tested is profitable at 10 bp.**
+
+And 10 bp is not pessimistic. The live log's 539 `spread_too_wide` rejections
+fired against a `max_spread_pct` gate of exactly 0.10%, which means real spreads
+on this universe *frequently exceed* 10 bp. The honest reading is that the true
+cost sits at or above the worst column in that table.
+
+## Two other corrections to this document
+
+**The count-matched control was not count-matched.** The headline table credits
+"Coin flip (8 seeds, count-matched)". `controls.py` ran **5** seeds at a fixed
+`random_entry_rate` and matched nothing — the coin flip took ~2,400 trades
+against the signal's 3,605. Comparing raw P&L across different trade counts
+measures exposure, not edge. `controls.calibrate_random_rate` now bisects the
+rate to reproduce the real trade count before comparing, and the seed count is
+genuinely 8. The conclusion is unaffected in direction — the SOXL controls in
+the previous addendum were run per-cell and still put the signal at +0.07 to
++1.11 sd — but the specific numbers in the headline table were produced by the
+unmatched version.
+
+**`record_equity="day"` could return an empty curve.** The daily equity point
+was attached to the last bar of each ET *date*, but out-of-session bars hit a
+`continue` before the mark-to-market step. So whenever postmarket bars trailed
+the session — which SIP data always includes — the record was never written and
+the daily curve came back **empty**, taking Sharpe, Sortino and max-drawdown
+with it. Any daily-frequency result in this document predating this fix should
+be regenerated.
+
+## Status of the recommendation
+
+`STOP_LOSS_PCT=0.015` / `TAKE_PROFIT_PCT=0.035` stays, on the narrower and
+accurate grounds that it loses substantially less than the previous setting
+under honest costs (-$20.48 against -$52.91 at 10 bp). The earlier grounds — that
+it was insensitive to execution assumptions — were wrong and are withdrawn.
+
+Nothing here changes the central finding. The entry signal is still a coin flip,
+and correcting the cost model moves every configuration further from
+profitability, not closer.
