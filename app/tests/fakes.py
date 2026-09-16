@@ -206,7 +206,7 @@ class FakeBroker:
         if order_id not in self.orders:
             raise BrokerError(f"no such order {order_id}")
         o = self.orders[order_id]
-        if o.status in {"filled", "canceled", "rejected", "expired"}:
+        if o.status in {"filled", "canceled", "rejected", "expired", "replaced", "done_for_day"}:
             return
         o.status = "pending_cancel" if self.cancel_leaves_pending else "canceled"
 

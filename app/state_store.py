@@ -4,6 +4,8 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, date, time, timezone
 from typing import Any, Dict, List, Optional
 
+import order_ledger
+
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%S.%f%z"
 
@@ -83,6 +85,17 @@ class BotState:
     # Symbols that need a market exit once the current exit order completes.
     pending_exit_symbols: List[str] = field(default_factory=list)
 
+    # Durable order/execution book. Authority for realized P&L, managed
+    # quantity and basis, and whether a holding is actually protected. Stored
+    # inside this same JSON object, and written by the same atomic replace, so
+    # it can never disagree with the rest of state after a crash.
+    ledger: Dict[str, Any] = field(default_factory=dict)
+    # Bumped when the on-disk shape changes. See migrate_if_needed().
+    schema_version: int = 0
+    # Human-readable notes from a migration that could not resolve something.
+    # Surfaced at startup rather than swallowed.
+    migration_notes: List[str] = field(default_factory=list)
+
     # Intraday position management (trailing stop / partial exit P&L)
     peak_price_since_entry: Optional[float] = None
     # When time-stop cancels a partially-filled stop, accumulate realized here until exit order fills.
@@ -144,7 +157,57 @@ class BotState:
         eps = merged.get("exit_pending_symbol")
         merged["exit_pending_symbol"] = str(eps).upper() if eps else None
 
-        return BotState(**merged)
+        if not isinstance(merged.get("ledger"), dict):
+            merged["ledger"] = {}
+        if not isinstance(merged.get("migration_notes"), list):
+            merged["migration_notes"] = []
+        try:
+            merged["schema_version"] = int(merged.get("schema_version") or 0)
+        except (TypeError, ValueError):
+            merged["schema_version"] = 0
+
+        state = BotState(**merged)
+        state.migrate_if_needed(data)
+        return state
+
+    # ---- schema migration ---------------------------------------------------
+
+    def migrate_if_needed(self, raw_data: Dict[str, Any]) -> None:
+        """
+        Bring pre-ledger state up to the current schema, in place.
+
+        Pre-ledger state (``schema_version`` 0 or absent) carries a position in
+        ``position_legs`` and a ``daily_realized_pnl`` that has *already* been
+        booked. The migration recovers the position and carries that figure
+        across, but deliberately does not synthesize executions for historical
+        fills: replaying them would double-count against a total that is already
+        final. Anything it cannot establish - a leg with a basis but no
+        quantity, a stop known only by broker id - is recorded in
+        ``migration_notes`` for reconciliation instead of guessed.
+
+        Idempotent: running it twice does not re-migrate or duplicate notes.
+        """
+        if self.schema_version >= order_ledger.SCHEMA_VERSION:
+            return
+        if self.ledger:
+            # Already has a ledger; just stamp the version forward.
+            self.schema_version = order_ledger.SCHEMA_VERSION
+            return
+
+        led, notes = order_ledger.migrate_legacy_state(raw_data)
+        self.ledger = led.to_dict()
+        self.migration_notes = notes
+        self.schema_version = order_ledger.SCHEMA_VERSION
+
+    # ---- ledger access ------------------------------------------------------
+
+    def get_ledger(self) -> "order_ledger.Ledger":
+        """Deserialize the ledger. Call :meth:`put_ledger` to store changes."""
+        return order_ledger.Ledger.from_dict(self.ledger)
+
+    def put_ledger(self, led: "order_ledger.Ledger") -> None:
+        self.ledger = led.to_dict()
+        self.schema_version = order_ledger.SCHEMA_VERSION
 
 
 class StateStore:
