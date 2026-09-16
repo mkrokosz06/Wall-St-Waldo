@@ -776,3 +776,67 @@ it was insensitive to execution assumptions — were wrong and are withdrawn.
 Nothing here changes the central finding. The entry signal is still a coin flip,
 and correcting the cost model moves every configuration further from
 profitability, not closer.
+
+---
+
+# The corrected baseline, 2026-09-15
+
+The canonical baseline under `spread_aware`. **Every number above this line was
+produced under `legacy` and is optimistic.** Regenerate anything you intend to
+rely on.
+
+Config as live: TQQQ+SOXL, `max_open_positions=2`, stop 0.015, target 0.035,
+trailing off, trend-break off, 5-minute opening delay,
+`MAX_ENTRY_ATTEMPTS_PER_DAY=0` (unlimited). $100 start, 166 trading days.
+
+| period | 2 bp | 4 bp | 10 bp | win % (10 bp) | trades |
+|---|---|---|---|---|---|
+| H1 Jan–Apr | +7.12 | +0.41 | **-4.79** | 39.9 | 238 |
+| H2 May–Sep | -4.23 | -6.68 | **-15.69** | 41.3 | 184 |
+| **Full sample** | **+2.90** | **-6.27** | **-20.48** | **40.5** | 422 |
+
+Break-even sits between 2 and 4 bp of spread. The live log's 539
+`spread_too_wide` rejections fired against a 10 bp gate, so the operative column
+is the last one.
+
+Full sample at 10 bp:
+
+| exit reason | count |
+|---|---|
+| stop | 203 |
+| eod | 162 |
+| take_profit | 57 |
+
+- per-symbol: **SOXL +1.59, TQQQ -22.07**
+- avg win +1.165, avg loss -0.875, Sharpe -0.99, avg hold 138 bars (~2.3 h)
+
+Two things worth reading off this.
+
+**It is no longer really a day-trading strategy.** At a 1.5% stop against a 3.5%
+target on a ~2-hour hold, 162 of 422 exits are the end-of-day flatten and only
+57 are take-profits. The exits mostly do not trigger; the clock closes the
+position. That is the same critique this document made of the +$62 grid winner,
+now applying to the live config.
+
+**TQQQ is the whole loss, and it cannot be dropped.** SOXL contributes +1.59 and
+TQQQ -22.07, which argues for a SOXL-only universe — except SOXL traded above
+$100 for 54.4% of the sample and sits at $112.89, so a $100 account cannot buy a
+single share. Removing TQQQ leaves nothing tradeable. The affordability
+constraint and the per-symbol attribution point in opposite directions, and
+account size is what resolves the conflict.
+
+## One consistency gained
+
+The backtest defaults to unlimited entry attempts because `bot.py` never
+enforced its cap. Setting `MAX_ENTRY_ATTEMPTS_PER_DAY=0` keeps live and research
+in agreement now that the cap is enforceable. Leaving it at the documented
+default of 3 would have made the live bot stop after three attempts per session
+while every backtest above assumed unlimited — the two would no longer describe
+the same system.
+
+Reproduce:
+
+```python
+cfg = replace(config.load_config(), symbols_universe=["TQQQ", "SOXL"])
+backtest.run_backtest(cfg, bars, 100.0, spread_bps=10.0)  # spread_aware default
+```
