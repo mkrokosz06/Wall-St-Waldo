@@ -161,6 +161,31 @@ class BotConfig:
     # behaviour; pass enforce_max_entry_attempts=True there to model the cap).
     #
     # Set MAX_ENTRY_ATTEMPTS_PER_DAY=0 to keep the previous unlimited behaviour.
+    # --- Short entries (research only as of 2026-09-15) ---
+    #
+    # The live bot is long-only: every sell in bot.py is a close. These flags
+    # exist so research/ can evaluate the short side before any of it is built
+    # into the trading loop. Setting enable_short_entries=True does NOT make the
+    # live bot short anything.
+    #
+    # Shorting requires a MARGIN account with >= $2,000 equity (FINRA's floor for
+    # leveraged trading, and Alpaca's threshold for margin/shorting). A cash
+    # account cannot short at any balance. The pattern-day-trader rule and its
+    # $25,000 minimum were eliminated effective 2026-06-04 by FINRA Regulatory
+    # Notice 26-10, so trade frequency is no longer the constraint; equity is.
+    enable_short_entries: bool = False
+    # Short only, never long. For testing the short side in isolation.
+    short_only: bool = False
+    # Momentum must be at or below this (negative) figure to short. Mirror of
+    # min_momentum_return, which gates longs.
+    max_momentum_return_for_short: float = 0.0
+    # Equity fraction a short position must be collateralized by. FINRA scales
+    # the 30% short maintenance requirement by the fund's leverage, so a 3x
+    # leveraged ETF carried short requires 3 x 0.30 = 0.90 of market value, with
+    # no cap. TQQQ and SOXL are both 3x, so 0.90 is the right figure for this
+    # universe and margin buys almost nothing on it.
+    short_maintenance_margin_pct: float = 0.90
+
     # Max age of a quote used to size or submit an entry. Separate from
     # stale_data_max_age_sec, which governs *bars*: a bar is published 60-90s
     # after its minute closes, so it needs a tolerance measured in minutes,
@@ -295,6 +320,15 @@ class BotConfig:
                 self.stop_loss_pct,
             )
 
+        if self.short_only and not self.enable_short_entries:
+            raise ValueError("short_only=True requires enable_short_entries=True")
+
+        if not (0.0 < self.short_maintenance_margin_pct <= 1.0):
+            raise ValueError(
+                f"short_maintenance_margin_pct must be in (0, 1] "
+                f"(got {self.short_maintenance_margin_pct})"
+            )
+
         if self.quote_stale_max_age_sec <= 0:
             raise ValueError(
                 f"quote_stale_max_age_sec must be > 0 (got {self.quote_stale_max_age_sec})"
@@ -387,6 +421,10 @@ def load_config() -> BotConfig:
         post_loss_extra_cooldown_sec=_env_int("POST_LOSS_EXTRA_COOLDOWN_SEC", 150),
         min_seconds_between_entry_orders=_env_int("MIN_SECONDS_BETWEEN_ENTRY_ORDERS", 2),
         entry_diagnostic_interval_sec=_env_int("ENTRY_DIAGNOSTIC_INTERVAL_SEC", 180),
+        enable_short_entries=_env_bool("ENABLE_SHORT_ENTRIES", False),
+        short_only=_env_bool("SHORT_ONLY", False),
+        max_momentum_return_for_short=_env_float("MAX_MOMENTUM_RETURN_FOR_SHORT", 0.0),
+        short_maintenance_margin_pct=_env_float("SHORT_MAINTENANCE_MARGIN_PCT", 0.90),
         quote_stale_max_age_sec=_env_int("QUOTE_STALE_MAX_AGE_SEC", 30),
         max_entry_attempts_per_day=_env_int("MAX_ENTRY_ATTEMPTS_PER_DAY", 3),
         max_open_positions=_env_int("MAX_OPEN_POSITIONS", 3),

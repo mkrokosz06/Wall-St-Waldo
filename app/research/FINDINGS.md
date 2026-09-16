@@ -840,3 +840,107 @@ Reproduce:
 cfg = replace(config.load_config(), symbols_universe=["TQQQ", "SOXL"])
 backtest.run_backtest(cfg, bars, 100.0, spread_bps=10.0)  # spread_aware default
 ```
+
+---
+
+# The short side, and what $2,000 actually does, 2026-09-15
+
+The research engine now supports short entries (`enable_short_entries`,
+`short_only`). The live bot does **not** — every sell in `bot.py` is still a
+close, and these flags change nothing there.
+
+Regulatory context, since it changed recently: FINRA Regulatory Notice 26-10
+eliminated the pattern-day-trader designation and its $25,000 minimum, effective
+**2026-06-04**, replacing them with risk-based intraday margin monitoring. Trade
+frequency is therefore no longer a constraint. What remains is a **$2,000
+minimum equity** for leveraged trading (Alpaca's threshold for margin and
+shorting too), and — specific to this universe — FINRA scales the 30% short
+maintenance requirement by fund leverage, so a **3x ETF carried short requires
+90% of market value**. Margin buys almost nothing on TQQQ or SOXL: $2,000 of
+equity supports about 1.11x of short notional, not 4x.
+
+## Result: shorting does not help, and more capital makes things worse
+
+$2,000 account, TQQQ+SOXL, stop 0.015 / target 0.035, risk and loss floor scaled
+to the larger account (`max_risk_per_trade=100`, `max_daily_realized_loss=-400`):
+
+| variant | spread | trades | win % | P&L | return | max DD |
+|---|---|---|---|---|---|---|
+| long only | 2 bp | 962 | 36.6 | -658.87 | -32.9% | -58.7% |
+| long only | 10 bp | 910 | 35.9 | **-1,077.72** | **-53.9%** | -61.7% |
+| short only | 2 bp | 1,120 | 33.8 | -570.08 | -28.5% | -70.2% |
+| short only | 10 bp | 1,089 | 35.0 | **-830.77** | **-41.5%** | -70.2% |
+| both sides | 2 bp | 1,407 | 34.6 | -1,259.08 | -63.0% | -74.9% |
+| both sides | 10 bp | 1,343 | 34.3 | **-1,274.83** | **-63.7%** | -69.6% |
+
+Three readings, in order of importance.
+
+### 1. The $100 account's poverty was protecting it
+
+At $100 the same config loses **-20.5%** over this sample. At $2,000 it loses
+**-53.9%**. That is not a scaling artifact — it is the strategy finally being
+able to act. At $100, whole-share sizing on $70–113 instruments permitted 422
+trades; at $2,000 it permits 910. A strategy with negative expectancy expresses
+more of it when it can trade more, so removing the affordability constraint
+roughly doubles the percentage loss.
+
+This inverts the recommendation made earlier in this document. "More capital" was
+listed as the first thing that would change the outcome, on the grounds that it
+restores breadth and makes SOXL affordable. It does both — and it makes the
+result materially worse, because breadth on a negative edge is not an
+improvement. **More capital is only useful after an edge exists.**
+
+### 2. The short side is not an edge either
+
+Short-only loses -41.5% at 10 bp. Running both sides is the worst
+configuration tested at -63.7%, because it doubles the trade count and pays two
+spreads to hold offsetting exposure on instruments that track the same indices.
+
+The control is the one mildly interesting number, and it should not be
+over-read:
+
+| short-only, 10 bp | trades | P&L | expectancy |
+|---|---|---|---|
+| real short signal | 1,089 | -830.77 | -0.7629 |
+| random entries, 8 seeds | ~494 | -857.19 (sd 254.58) | -1.7283 (sd 0.4922) |
+
+**+1.96 sd** — borderline by the usual threshold. But both are heavily negative:
+the finding is "the short signal loses less than a coin flip does", not "the
+short signal makes money". And the comparison is confounded, because the control
+took 494 trades against the real signal's 1,089. It is not count-matched, so
+part of that gap is exposure rather than skill. Treat it as a hint that
+inverted momentum carries slightly more information than nothing, not as a
+tradeable result.
+
+### 3. Holding beats every version of the bot, by a wide margin
+
+At $2,000, over the same eight months:
+
+| | result |
+|---|---|
+| 47 shares of SOXL, held | **+$3,330.89** (+168.7%) |
+| 38 shares of TQQQ, held | +$736.82 (+36.9%) |
+| the bot, long only, 10 bp | -$1,077.72 |
+| the bot, short only, 10 bp | -$830.77 |
+
+The spread between buying SOXL and running the bot on it is about **$4,400** on
+a $2,000 account. Every version of this strategy is an expensive way to avoid
+owning something that went up.
+
+## What this closes off
+
+- **Shorting.** Tested symmetrically, under honest costs, with a control. Not an
+  edge. It needs margin, $2,000, and 90% collateral on this universe, and it
+  loses money.
+- **"Just add capital."** Tested. Makes the percentage loss worse, for a
+  comprehensible reason.
+
+Both were plausible before being measured, and neither survives. What remains
+untested is a genuinely different entry signal — nothing in this document has
+ever tested one, and the existing signal is now measured as a coin flip long and
+as slightly-better-than-a-coin-flip short. That is the only branch left with any
+room in it.
+
+Reproduce: `enable_short_entries=True` / `short_only=True` on a config,
+`spread_bps=10`, `start_equity=2000`. Mechanics are pinned by
+`app/tests/test_short_side.py` (17 tests).

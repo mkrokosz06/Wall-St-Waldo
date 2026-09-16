@@ -148,6 +148,7 @@ class Trade:
     bars_held: int
     mfe: float  # max favourable excursion, fraction of entry price
     mae: float  # max adverse excursion, fraction of entry price (negative)
+    direction: int = 1  # +1 long, -1 short
 
 
 @dataclass
@@ -292,6 +293,14 @@ class _Leg:
     peak: float
     mfe: float = 0.0
     mae: float = 0.0
+    # +1 long, -1 short. A short's stop sits ABOVE entry and its target BELOW,
+    # and its excursions are mirrored: the high of a bar is adverse, the low
+    # favourable. Every sign in the accounting derives from this field.
+    direction: int = 1
+
+    @property
+    def is_short(self) -> bool:
+        return self.direction < 0
 
 
 @dataclass
@@ -300,6 +309,7 @@ class _PendingEntry:
     qty: float
     limit_px: float
     score: float
+    direction: int = 1
 
 
 def _parse_hhmm(value: str) -> Tuple[int, int]:
@@ -611,6 +621,53 @@ def run_backtest(
         out.sort(key=lambda x: x[1], reverse=True)
         return out
 
+    def _choose_short_candidate_fast(
+        k: int, now: pd.Timestamp, held: set[str]
+    ) -> Tuple[Optional[str], float]:
+        """
+        Pick a short candidate: the mirror of the long gate.
+
+        Ranks by *ascending* score and requires momentum at or below
+        ``max_momentum_return_for_short``. The trend filter is inverted too - a
+        long wants price above its moving averages, a short wants it below.
+
+        This is deliberately the symmetric counterpart of the existing signal
+        rather than a new idea. It answers "does this signal work in the other
+        direction", which is worth knowing before anything more elaborate is
+        built on top of a signal already measured as a coin flip.
+        """
+        ranked = _score_symbols_fast(k)
+        if not ranked:
+            return None, np.inf
+        adj = cfg.symbol_score_adjustments or {}
+        # Ascending: the most negative score is the best short.
+        ranked.sort(key=lambda x: x[1] + float(adj.get(x[0], 0.0)))
+
+        mom_ceiling = float(cfg.max_momentum_return_for_short)
+        for best_symbol, raw_score in ranked:
+            if best_symbol in held:
+                continue
+            ok_after = cooldown_until.get(best_symbol)
+            if ok_after is not None and now < ok_after:
+                continue
+            if spread_pct_model > cfg.max_spread_pct:
+                continue
+            s_ = series[best_symbol]
+            j = int(s_.end_pos[k]) - 1
+            sg = sigs[best_symbol]
+            momentum_return = float(sg.momentum[j])
+            if not (momentum_return <= mom_ceiling):  # NaN-safe
+                continue
+            if cfg.enable_trend_filter and bool(sg.uptrend[j]):
+                # Inverted: an uptrend disqualifies a short.
+                continue
+            # score_valid already folds in the minimum-volume and
+            # sufficient-history gates (see fastsig.precompute_symbol).
+            if not bool(sg.score_valid[j]):
+                continue
+            return best_symbol, raw_score
+        return None, np.inf
+
     def _choose_entry_candidate_fast(
         k: int, now: pd.Timestamp, held: set[str]
     ) -> Tuple[Optional[str], float]:
@@ -691,9 +748,30 @@ def run_backtest(
         return str(rng.choice(pool)), 0.0
 
     def _invested_value() -> float:
+        """
+        Mark-to-market value of open positions, as it contributes to equity.
+
+        A long contributes its market value. A short contributes the collateral
+        held against it plus its unrealized gain, because the sale proceeds were
+        never credited as spendable cash - they sit against the position. Adding
+        a short's market value the way a long's is added would make equity rise
+        as the position moved against us.
+        """
+        total = 0.0
+        for l in legs.values():
+            px = last_close.get(l.symbol, l.entry_px)
+            if l.is_short:
+                total += l.qty * l.entry_px * cfg.short_maintenance_margin_pct
+                total += (l.entry_px - px) * l.qty
+            else:
+                total += l.qty * px
+        return total
+
+    def _gross_exposure() -> float:
+        """Absolute notional at risk, both sides, for the portfolio cap."""
         return sum(l.qty * last_close.get(l.symbol, l.entry_px) for l in legs.values())
 
-    def _compute_qty(entry_price: float) -> float:
+    def _compute_qty(entry_price: float, direction: int = 1) -> float:
         """Port of ``TradeBot._compute_qty_for_entry`` against simulated balances."""
         if daily_realized <= cfg.max_daily_realized_loss:
             return 0.0
@@ -703,8 +781,16 @@ def run_backtest(
         if stop_distance <= 0 or entry_price <= 0 or cash <= 0:
             return 0.0
         qty_by_risk = risk_per_trade / stop_distance
-        qty_by_cash = cash / entry_price
-        room = max(0.0, float(cfg.max_portfolio_notional_usd) - _invested_value())
+        if direction < 0:
+            # A short does not pay the share price; it posts collateral. FINRA
+            # scales the 30% short requirement by fund leverage, so a 3x ETF
+            # needs 90% of market value - which means margin buys almost
+            # nothing on this universe. 1/0.90 = 1.11x, not 4x.
+            per_share_collateral = entry_price * cfg.short_maintenance_margin_pct
+            qty_by_cash = cash / per_share_collateral if per_share_collateral > 0 else 0.0
+        else:
+            qty_by_cash = cash / entry_price
+        room = max(0.0, float(cfg.max_portfolio_notional_usd) - _gross_exposure())
         qty_by_cap = (room * 0.98) / entry_price
         qty = min(qty_by_risk, qty_by_cash * 0.98, qty_by_cap)
         if whole_shares:
@@ -713,13 +799,28 @@ def run_backtest(
             qty = float(round(qty, 6))
         return qty if qty > 0 else 0.0
 
+    def _close_fill(leg: _Leg, reference: float) -> float:
+        """Price to close ``leg`` at ``reference`` — a short covers by buying."""
+        return xm.buy_fill(reference) if leg.is_short else xm.sell_fill(reference)
+
     def _close_leg(leg: _Leg, exit_px: float, exit_ts: pd.Timestamp, reason: str, k: int) -> None:
         nonlocal cash, daily_realized, halt_new_entries
         # Charge the fee once, to cash and to P&L, from the same figure. The
         # entry already paid one fee when it filled, so a round trip pays two.
-        proceeds = leg.qty * exit_px - xm.fee
-        cash += proceeds
-        pnl = (exit_px - leg.entry_px) * leg.qty - 2.0 * xm.fee
+        #
+        # Signed for direction. A long sells to close, receiving proceeds. A
+        # short BUYS to close, paying them out - and its gain is entry minus
+        # exit, the mirror of a long's.
+        if leg.is_short:
+            # Release the collateral that was reserved at entry, then pay for
+            # the buy-to-cover. The entry credited no cash: short sale proceeds
+            # are held against the position, not spendable.
+            cash += leg.qty * leg.entry_px * cfg.short_maintenance_margin_pct
+            cash -= leg.qty * exit_px - leg.qty * leg.entry_px
+            cash -= xm.fee
+        else:
+            cash += leg.qty * exit_px - xm.fee
+        pnl = (exit_px - leg.entry_px) * leg.qty * leg.direction - 2.0 * xm.fee
         daily_realized += pnl
         if daily_realized <= cfg.max_daily_realized_loss:
             halt_new_entries = True
@@ -732,11 +833,12 @@ def run_backtest(
                 exit_px=exit_px,
                 qty=leg.qty,
                 pnl=pnl,
-                pnl_pct=(exit_px / leg.entry_px - 1.0) * 100.0,
+                pnl_pct=(exit_px / leg.entry_px - 1.0) * 100.0 * leg.direction,
                 exit_reason=reason,
                 bars_held=k - leg.entry_bar,
                 mfe=leg.mfe,
                 mae=leg.mae,
+                direction=leg.direction,
             )
         )
         legs.pop(leg.symbol, None)
@@ -799,7 +901,7 @@ def run_backtest(
                 if leg is None or s is None or not s.has_bar_at(k):
                     pending_exits.pop(sym, None)
                     continue
-                px = xm.sell_fill(float(s.open[int(s.end_pos[k]) - 1]))
+                px = _close_fill(leg, float(s.open[int(s.end_pos[k]) - 1]))
                 _close_leg(leg, px, now, reason, k)
                 pending_exits.pop(sym, None)
 
@@ -809,19 +911,33 @@ def run_backtest(
             s = series.get(pe.symbol)
             if s is not None and s.has_bar_at(k) and pe.symbol not in legs:
                 raw_open = float(s.open[int(s.end_pos[k]) - 1])
-                fill = xm.buy_fill(raw_open)
-                skip = require_limit_fill and raw_open > pe.limit_px
-                # The limit is only a real constraint in require_limit_fill mode.
-                # By default the engine models the entry as filling at the next
-                # bar's open regardless of the submitted limit - a documented
-                # approximation, because a minute bar cannot establish whether a
-                # limit filled inside the live 20-second window. Under
-                # require_limit_fill the guarantee is enforced strictly: a buy
-                # never fills above its limit, slippage included.
-                if require_limit_fill and not skip:
-                    if xm.cap_buy_at_limit(fill, pe.limit_px) is None:
-                        skip = True
-                cost = pe.qty * fill + xm.fee
+                is_short = pe.direction < 0
+                # A short opens by SELLING, so it fills on the bid.
+                fill = xm.sell_fill(raw_open) if is_short else xm.buy_fill(raw_open)
+                if is_short:
+                    # Skip when the open is below the short's limit: selling
+                    # short below the intended price is the adverse case.
+                    skip = require_limit_fill and raw_open < pe.limit_px
+                else:
+                    skip = require_limit_fill and raw_open > pe.limit_px
+                    # The limit is only a real constraint in require_limit_fill mode.
+                    # By default the engine models the entry as filling at the next
+                    # bar's open regardless of the submitted limit - a documented
+                    # approximation, because a minute bar cannot establish whether a
+                    # limit filled inside the live 20-second window. Under
+                    # require_limit_fill the guarantee is enforced strictly: a buy
+                    # never fills above its limit, slippage included.
+                    if require_limit_fill and not skip:
+                        if xm.cap_buy_at_limit(fill, pe.limit_px) is None:
+                            skip = True
+                if is_short:
+                    # Post collateral rather than pay the share price. Short sale
+                    # proceeds are held against the position, not credited as
+                    # spendable cash, which is why _invested_value carries the
+                    # collateral back into equity.
+                    cost = pe.qty * fill * cfg.short_maintenance_margin_pct + xm.fee
+                else:
+                    cost = pe.qty * fill + xm.fee
                 if not skip and pe.qty > 0 and cost <= cash:
                     cash -= cost
                     legs[pe.symbol] = _Leg(
@@ -830,8 +946,12 @@ def run_backtest(
                         entry_px=fill,
                         entry_ts=now,
                         entry_bar=k,
-                        stop_px=fill * (1.0 - cfg.stop_loss_pct),
+                        # A short's stop is ABOVE its entry.
+                        stop_px=fill * (1.0 + cfg.stop_loss_pct)
+                        if is_short
+                        else fill * (1.0 - cfg.stop_loss_pct),
                         peak=fill,
+                        direction=pe.direction,
                     )
 
         # --- 2. manage open positions on this bar ----------------------------
@@ -847,12 +967,27 @@ def run_backtest(
                     float(s.open[i]), float(s.high[i]), float(s.low[i]), float(s.close[i])
                 )
 
-                # excursions
-                leg.mfe = max(leg.mfe, b_high / leg.entry_px - 1.0)
-                leg.mae = min(leg.mae, b_low / leg.entry_px - 1.0)
+                # excursions, mirrored for a short: the bar's high is the
+                # adverse move and its low the favourable one.
+                if leg.is_short:
+                    leg.mfe = max(leg.mfe, 1.0 - b_low / leg.entry_px)
+                    leg.mae = min(leg.mae, 1.0 - b_high / leg.entry_px)
+                else:
+                    leg.mfe = max(leg.mfe, b_high / leg.entry_px - 1.0)
+                    leg.mae = min(leg.mae, b_low / leg.entry_px - 1.0)
 
                 # 2a. stop first (conservative intrabar ordering)
-                if b_low <= leg.stop_px:
+                if leg.is_short:
+                    # A short's stop is above entry and triggers on the high.
+                    # Gap-through is upward: a bar opening above the stop covers
+                    # at the open, which is worse than the stop price.
+                    if b_high >= leg.stop_px:
+                        reference = max(leg.stop_px, b_open) if b_open > leg.stop_px else leg.stop_px
+                        reference = min(reference, b_high)
+                        px = xm.buy_fill(reference)
+                        _close_leg(leg, px, now, "stop", k)
+                        continue
+                elif b_low <= leg.stop_px:
                     # A stop is a trigger, not a guaranteed price: if the bar
                     # gapped below it, the fill is the open.
                     px = xm.stop_fill(leg.stop_px, b_open, b_low)
@@ -861,17 +996,29 @@ def run_backtest(
 
                 # 2b. take-profit (live compares the bid)
                 if cfg.enable_take_profit and leg.entry_px > 0:
-                    tp_bid_target = leg.entry_px * (1.0 + cfg.take_profit_pct)
-                    if b_high * bid_f >= tp_bid_target:
-                        # The reference price at which the bid reaches the
-                        # target. Previously this divided the bid factor back
-                        # out and then credited that mid directly, so the exit
-                        # was filled above the bid it was meant to sell at.
-                        raw_tp = tp_bid_target / bid_f if bid_f else tp_bid_target
-                        reference = max(raw_tp, b_open) if b_open > raw_tp else raw_tp
-                        px = xm.sell_fill(reference)
-                        _close_leg(leg, px, now, "take_profit", k)
-                        continue
+                    if leg.is_short:
+                        # A short's target is below entry, and it covers by
+                        # buying, so the ask is what has to reach the target.
+                        tp_ask_target = leg.entry_px * (1.0 - cfg.take_profit_pct)
+                        ask_f = xm.ask_factor
+                        if b_low * ask_f <= tp_ask_target:
+                            raw_tp = tp_ask_target / ask_f if ask_f else tp_ask_target
+                            reference = min(raw_tp, b_open) if b_open < raw_tp else raw_tp
+                            px = xm.buy_fill(reference)
+                            _close_leg(leg, px, now, "take_profit", k)
+                            continue
+                    else:
+                        tp_bid_target = leg.entry_px * (1.0 + cfg.take_profit_pct)
+                        if b_high * bid_f >= tp_bid_target:
+                            # The reference price at which the bid reaches the
+                            # target. Previously this divided the bid factor back
+                            # out and then credited that mid directly, so the exit
+                            # was filled above the bid it was meant to sell at.
+                            raw_tp = tp_bid_target / bid_f if bid_f else tp_bid_target
+                            reference = max(raw_tp, b_open) if b_open > raw_tp else raw_tp
+                            px = xm.sell_fill(reference)
+                            _close_leg(leg, px, now, "take_profit", k)
+                            continue
 
                 # 2c. ratchet the trailing stop AFTER this bar's checks
                 if cfg.enable_trailing_stop:
@@ -933,7 +1080,7 @@ def run_backtest(
                         pending_exits[sym] = reason
                     else:
                         # No next bar in the session: settle at this bar's close.
-                        _close_leg(leg, xm.sell_fill(b_close), now, reason, k)
+                        _close_leg(leg, _close_fill(leg, b_close), now, reason, k)
 
         # --- 3. entry scan ----------------------------------------------------
         can_enter = (
@@ -948,20 +1095,36 @@ def run_backtest(
             can_enter = entry_attempts_today < int(cfg.max_entry_attempts_per_day)
         if can_enter:
             held = set(legs) | set(pending_exits)
+            cand: Optional[str] = None
+            score = -np.inf
+            direction = 1
             if rng is not None:
                 cand, score = _choose_entry_candidate_random(k, now, held)
-            elif fast:
-                cand, score = _choose_entry_candidate_fast(k, now, held)
             else:
-                cand, score = _choose_entry_candidate(_window(k), now, held)
+                if not cfg.short_only:
+                    if fast:
+                        cand, score = _choose_entry_candidate_fast(k, now, held)
+                    else:
+                        cand, score = _choose_entry_candidate(_window(k), now, held)
+                if cand is None and cfg.enable_short_entries and fast:
+                    # Longs get first refusal unless short_only is set. Only one
+                    # side is attempted per bar, mirroring the live loop's single
+                    # pending entry.
+                    cand, score = _choose_short_candidate_fast(k, now, held)
+                    if cand is not None:
+                        direction = -1
             if cand is not None:
                 s = series[cand]
                 px_close = float(s.close[int(s.end_pos[k]) - 1])
-                bid = px_close * bid_f
-                limit_px = bid * (1.0 + cfg.entry_limit_offset_pct)
-                qty = _compute_qty(limit_px)
+                if direction < 0:
+                    # Sell short at the bid, offset the other way.
+                    limit_px = px_close * bid_f * (1.0 - cfg.entry_limit_offset_pct)
+                else:
+                    bid = px_close * bid_f
+                    limit_px = bid * (1.0 + cfg.entry_limit_offset_pct)
+                qty = _compute_qty(limit_px, direction)
                 if qty > 0 and k + 1 < n:
-                    pending_entry = _PendingEntry(cand, qty, limit_px, score)
+                    pending_entry = _PendingEntry(cand, qty, limit_px, score, direction)
                     entry_attempts_today += 1
 
         # --- 4. mark to market ------------------------------------------------
@@ -988,7 +1151,7 @@ def run_backtest(
             s = series[sym]
             e = int(s.end_pos[k])
             px = float(s.close[e - 1]) if e > 0 else leg.entry_px
-            _close_leg(leg, xm.sell_fill(px), now, "end_of_data", k)
+            _close_leg(leg, _close_fill(leg, px), now, "end_of_data", k)
         if equity_vals:
             equity_vals[-1] = cash
 
