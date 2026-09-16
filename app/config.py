@@ -150,6 +150,17 @@ class BotConfig:
     post_loss_extra_cooldown_sec: int = 150
     # Min gap between *placing* new entry orders (any symbol); per-symbol cooldown is separate.
     min_seconds_between_entry_orders: int = 2
+    # Cap on distinct entry *intents* per ET session date. 0 disables the cap.
+    #
+    # This was dead config until 2026-09-15: config.py defined it, bot.py
+    # incremented the counter, and nothing ever compared the two, so the
+    # documented "3 entries per day" cap did not exist and behaviour was
+    # unlimited. It is now enforced in the entry gate, which is a real change in
+    # behaviour from every historical run and from every backtest in research/
+    # (the engine still defaults to unlimited to reproduce the old live
+    # behaviour; pass enforce_max_entry_attempts=True there to model the cap).
+    #
+    # Set MAX_ENTRY_ATTEMPTS_PER_DAY=0 to keep the previous unlimited behaviour.
     max_entry_attempts_per_day: int = 3
     # INFO log every N seconds summarizing why no buy (0 = disable). Helps explain "silent" sessions.
     entry_diagnostic_interval_sec: int = 180
@@ -278,6 +289,12 @@ class BotConfig:
                 self.stop_loss_pct,
             )
 
+        if self.max_entry_attempts_per_day < 0:
+            raise ValueError(
+                f"max_entry_attempts_per_day must be >= 0 (got {self.max_entry_attempts_per_day}); "
+                "use 0 to disable the cap"
+            )
+
         if self.entry_score_threshold > 0.005:
             _log.warning(
                 "Config warning: entry_score_threshold=%.6f is very high. "
@@ -339,6 +356,7 @@ def load_config() -> BotConfig:
         post_loss_extra_cooldown_sec=_env_int("POST_LOSS_EXTRA_COOLDOWN_SEC", 150),
         min_seconds_between_entry_orders=_env_int("MIN_SECONDS_BETWEEN_ENTRY_ORDERS", 2),
         entry_diagnostic_interval_sec=_env_int("ENTRY_DIAGNOSTIC_INTERVAL_SEC", 180),
+        max_entry_attempts_per_day=_env_int("MAX_ENTRY_ATTEMPTS_PER_DAY", 3),
         max_open_positions=_env_int("MAX_OPEN_POSITIONS", 3),
         market_open_delay_minutes=_env_int("MARKET_OPEN_DELAY_MINUTES", 15),
         max_portfolio_notional_usd=_env_float("MAX_PORTFOLIO_NOTIONAL_USD", 10_000.0),

@@ -37,20 +37,57 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 class TradeBot:
-    def __init__(self) -> None:
-        self.config: BotConfig = load_config()
-        self.state_store = StateStore(self.config.state_path)
-        self.state: BotState = self.state_store.load()
+    def __init__(
+        self,
+        *,
+        config: Optional[BotConfig] = None,
+        state_store: Optional[StateStore] = None,
+        trading: Optional[object] = None,
+        market: Optional[object] = None,
+        clock: Optional[object] = None,
+        validate_auth: Optional[bool] = None,
+        bot_log_path: Optional[str] = None,
+    ) -> None:
+        """
+        Build a bot.
 
-        self.trading = AlpacaTradingREST(
-            api_key=self.config.api_key,
-            api_secret=self.config.api_secret,
-            paper=self.config.paper,
+        Every dependency is injectable so the bot can be constructed offline with
+        fakes. Production passes nothing and gets the real behaviour unchanged:
+        config from ``.env``, live Alpaca clients, and the startup credential
+        check. Tests pass a fake broker, a fake clock and a temp state path, which
+        is what keeps the offline suite free of network and credential access.
+
+        ``clock`` needs ``utc_now()`` and ``et_now()``. When omitted the real
+        wall clock is used.
+        """
+        self.config: BotConfig = config if config is not None else load_config()
+        self.state_store = (
+            state_store if state_store is not None else StateStore(self.config.state_path)
         )
-        self.market = AlpacaMarketData(
-            api_key=self.config.api_key,
-            api_secret=self.config.api_secret,
-            paper=self.config.paper,
+        self.state: BotState = self.state_store.load()
+        self._clock = clock
+        self._injected = trading is not None or market is not None
+        # Log path is injectable so an offline test can point the trainers and
+        # the file handler at a temp file instead of the user's real bot.log.
+        self._bot_log_path = bot_log_path or resolve_bot_log_path()
+
+        self.trading = (
+            trading
+            if trading is not None
+            else AlpacaTradingREST(
+                api_key=self.config.api_key,
+                api_secret=self.config.api_secret,
+                paper=self.config.paper,
+            )
+        )
+        self.market = (
+            market
+            if market is not None
+            else AlpacaMarketData(
+                api_key=self.config.api_key,
+                api_secret=self.config.api_secret,
+                paper=self.config.paper,
+            )
         )
 
         # Logging
@@ -67,7 +104,7 @@ class TradeBot:
         if self.config.enable_offline_training:
             try:
                 tr = train_from_bot_log(
-                    self.config, self.state, bot_log_path=resolve_bot_log_path()
+                    self.config, self.state, bot_log_path=self._bot_log_path
                 )
                 self.state.dynamic_entry_score_threshold = tr.dynamic_entry_score_threshold
                 self.state.dynamic_min_momentum_return = tr.dynamic_min_momentum_return
@@ -86,7 +123,7 @@ class TradeBot:
         if self.config.enable_online_training and not self.state.recent_trade_pnls:
             try:
                 n = max(1, int(self.config.online_training_window_trades))
-                pnls = extract_recent_exit_pnls_from_log(resolve_bot_log_path(), n)
+                pnls = extract_recent_exit_pnls_from_log(self._bot_log_path, n)
                 if pnls:
                     self.state.recent_trade_pnls = pnls
                     self._apply_online_training_from_window()
@@ -96,7 +133,11 @@ class TradeBot:
                 self.logger.warning("Online training log seed failed (non-fatal): %s", e)
 
         # Validate credentials early (prevents running into 401s mid-loop).
-        self._validate_auth()
+        # Skipped when a broker was injected: a fake has no credentials to check,
+        # and an offline test must never reach the network.
+        should_validate = (not self._injected) if validate_auth is None else validate_auth
+        if should_validate:
+            self._validate_auth()
 
         # Throttle "why no buy" INFO diagnostics (see _maybe_log_entry_diagnosis).
         self._last_entry_diagnostic_ts: float = 0.0
@@ -140,7 +181,7 @@ class TradeBot:
             sh.setLevel(level)
             self.logger.addHandler(sh)
 
-            fh = logging.FileHandler(resolve_bot_log_path(), encoding="utf-8")
+            fh = logging.FileHandler(self._bot_log_path, encoding="utf-8")
             fh.setFormatter(fmt)
             fh.setLevel(level)
             self.logger.addHandler(fh)
@@ -161,9 +202,13 @@ class TradeBot:
         )
 
     def _et_now(self) -> datetime:
+        if self._clock is not None:
+            return self._clock.et_now()
         return datetime.now(tz=ET_TZ)
 
     def _utc_now(self) -> datetime:
+        if self._clock is not None:
+            return self._clock.utc_now()
         return datetime.now(tz=ZoneInfo("UTC"))
 
     def _snapshot_day_start_equity(self) -> None:
@@ -379,23 +424,86 @@ class TradeBot:
 
         for sym in symbols:
             sym_u = sym.upper()
+            # Lookup and sell are reported separately: "I do not know the
+            # quantity" and "I knew it but the sell failed" are different
+            # unresolved states, and collapsing them hides which one happened.
             try:
-                qty, _ = self._position_for_symbol(sym_u)
-                if qty > 0:
-                    self.logger.warning("Flattening untracked position: %s qty=%s", sym_u, qty)
-                    self._place_market_sell(sym_u, qty)
+                # Unfiltered on purpose: these symbols are typically outside the
+                # current universe, which is why they need flattening at all.
+                qty, _ = self._broker_position_for_symbol(sym_u)
             except Exception as e:
-                self.logger.error("Failed flattening %s: %s", sym_u, e)
+                self.logger.error(
+                    "UNRESOLVED EXPOSURE: could not establish %s quantity; not selling: %s",
+                    sym_u,
+                    e,
+                )
+                continue
+
+            if qty <= 0:
+                self.logger.info("Nothing to flatten for %s (broker reports flat).", sym_u)
+                continue
+
+            self.logger.warning("Flattening untracked position: %s qty=%s", sym_u, qty)
+            try:
+                self._place_market_sell(sym_u, qty)
+            except Exception as e:
+                self.logger.error(
+                    "UNRESOLVED EXPOSURE: %s qty=%s is open and its exit failed to submit: %s",
+                    sym_u,
+                    qty,
+                    e,
+                )
 
     def _total_universe_market_value(self) -> float:
         return sum(p[3] for p in self._list_universe_positions())
 
     def _position_for_symbol(self, symbol: str) -> Tuple[float, float]:
-        """Broker qty and avg for symbol (0,0 if flat)."""
+        """
+        Broker qty and avg for a symbol *in the configured universe* (0,0 if flat).
+
+        Entry sizing and portfolio caps want this universe-filtered view. Closing
+        a position does not — use :meth:`_broker_position_for_symbol` there. See
+        the note on that method.
+        """
         sym_u = symbol.upper()
         for sym, qty, avg, _ in self._list_universe_positions():
             if sym == sym_u:
                 return qty, avg
+        return 0.0, 0.0
+
+    def _broker_position_for_symbol(self, symbol: str) -> Tuple[float, float]:
+        """
+        Broker qty and avg for a symbol, with no universe filtering.
+
+        Separate from :meth:`_position_for_symbol` because conflating the two was
+        a live bug: ``_flatten_symbols`` is called precisely for holdings that
+        are *outside* ``SYMBOLS_UNIVERSE`` (a symbol was removed from the config
+        while a position was open), but it read quantity through the
+        universe-filtered lookup. That returned 0.0, so the flatten cancelled the
+        position's protective orders and then sold nothing — leaving an
+        unprotected, unmanaged holding, which is strictly worse than not having
+        run at all.
+
+        Raises on a failed or unparseable broker read rather than returning 0.0:
+        a missing answer is not evidence of a flat position.
+        """
+        sym_u = symbol.upper()
+        positions = self.trading.get_positions()
+        if positions is None:
+            raise RuntimeError(f"broker position lookup for {sym_u} returned no data")
+        for p in positions:
+            if str(p.get("symbol", "")).upper() != sym_u:
+                continue
+            if "qty" not in p:
+                raise RuntimeError(
+                    f"broker position for {sym_u} has no qty field: {sorted(p)}"
+                )
+            try:
+                qty = float(p.get("qty") or 0)
+                avg = float(p.get("avg_entry_price") or 0)
+            except (TypeError, ValueError) as e:
+                raise RuntimeError(f"unparseable broker position for {sym_u}: {p}") from e
+            return qty, avg
         return 0.0, 0.0
 
     def _reconcile_position(self) -> Tuple[float, Optional[str], Optional[float]]:
@@ -405,6 +513,104 @@ class TradeBot:
             return 0.0, None, None
         sym, qty, avg, _ = lst[0]
         return qty, sym, avg
+
+    def _effective_thresholds(self) -> Tuple[float, float]:
+        """
+        The entry score and momentum floors actually used for selection.
+
+        One helper, shared by candidate selection, the diagnostic line and the
+        config snapshot, so the logs can never disagree with the decision. They
+        used to resolve this independently in two places.
+
+        Persisted ``dynamic_*`` overrides are honoured only while the trainer
+        that produced them is enabled. With both trainers off, stale overrides
+        are ignored outright: the live state carried score and momentum floors of
+        -0.00025 written by a trainer that has since been disabled, and a
+        *negative* momentum floor means "buy things that are falling", which is
+        the opposite of the intended gate. Historical trade data is untouched;
+        only the active overrides are disregarded.
+        """
+        score = self.config.entry_score_threshold
+        mom = self.config.min_momentum_return
+        training_on = bool(
+            self.config.enable_online_training or self.config.enable_offline_training
+        )
+        if training_on:
+            if self.state.dynamic_entry_score_threshold is not None:
+                score = float(self.state.dynamic_entry_score_threshold)
+            if self.state.dynamic_min_momentum_return is not None:
+                mom = float(self.state.dynamic_min_momentum_return)
+        return score, mom
+
+    def _threshold_source(self) -> str:
+        if self.config.enable_online_training:
+            return "online_training"
+        if self.config.enable_offline_training:
+            return "offline_training"
+        return "config"
+
+    def _clear_disabled_training_overrides(self) -> None:
+        """
+        Drop persisted threshold overrides when no trainer is enabled.
+
+        Called once at startup. Without this the overrides sit in state forever
+        and silently reactivate the moment anything reads them directly.
+        """
+        if self.config.enable_online_training or self.config.enable_offline_training:
+            return
+        had = (
+            self.state.dynamic_entry_score_threshold is not None
+            or self.state.dynamic_min_momentum_return is not None
+        )
+        if not had:
+            return
+        self.logger.info(
+            "Clearing persisted dynamic thresholds (score=%s mom=%s): both trainers are "
+            "disabled, so these overrides are stale and will not be applied.",
+            self.state.dynamic_entry_score_threshold,
+            self.state.dynamic_min_momentum_return,
+        )
+        self.state.dynamic_entry_score_threshold = None
+        self.state.dynamic_min_momentum_return = None
+        self.state_store.save(self.state)
+
+    def _entry_attempts_exhausted(self) -> bool:
+        """True when today's distinct-entry-intent cap is used up."""
+        cap = int(self.config.max_entry_attempts_per_day)
+        if cap <= 0:
+            return False
+        return int(self.state.entry_attempts_today) >= cap
+
+    def _log_effective_config(self) -> None:
+        """Log a secret-free snapshot of what is actually in force."""
+        score, mom = self._effective_thresholds()
+        self.logger.info(
+            "Effective config: universe=%s max_open=%d stop=%.4f target=%.4f "
+            "entry_attempts_cap=%s thresholds score>=%.6f mom>=%.6f source=%s "
+            "feed=%s stale_bar_max=%ds risk_per_trade=%.2f daily_loss_floor=%.2f "
+            "notional_cap=%.0f trailing=%s trend_break=%s time_stop=%s "
+            "online_training=%s offline_training=%s extended_hours=%s paper=%s",
+            ",".join(self.config.symbols_universe),
+            self.config.max_open_positions,
+            self.config.stop_loss_pct,
+            self.config.take_profit_pct,
+            self.config.max_entry_attempts_per_day or "disabled",
+            score,
+            mom,
+            self._threshold_source(),
+            getattr(self.config, "alpaca_data_feed", "iex"),
+            self.config.stale_data_max_age_sec,
+            self.config.max_risk_per_trade,
+            self.config.max_daily_realized_loss,
+            self.config.max_portfolio_notional_usd,
+            self.config.enable_trailing_stop,
+            self.config.enable_trend_break_exit,
+            self.config.enable_time_stop,
+            self.config.enable_online_training,
+            self.config.enable_offline_training,
+            getattr(self.config, "enable_extended_hours", False),
+            self.config.paper,
+        )
 
     def _symbol_entry_cooldown_elapsed(self, sym: str) -> bool:
         raw = self.state.symbol_next_entry_ok_after.get(sym.upper())
@@ -1104,16 +1310,7 @@ class TradeBot:
         if not ranked:
             return self._diagnose_empty_score_rank(bars_df)
 
-        dynamic_score_threshold = (
-            self.state.dynamic_entry_score_threshold
-            if self.state.dynamic_entry_score_threshold is not None
-            else self.config.entry_score_threshold
-        )
-        dynamic_min_momentum_return = (
-            self.state.dynamic_min_momentum_return
-            if self.state.dynamic_min_momentum_return is not None
-            else self.config.min_momentum_return
-        )
+        dynamic_score_threshold, dynamic_min_momentum_return = self._effective_thresholds()
 
         if loop_quotes is not None:
             quotes = loop_quotes
@@ -1234,10 +1431,7 @@ class TradeBot:
         cap = float(self.config.max_portfolio_notional_usd)
         room = max(0.0, cap - inv)
 
-        ds = self.state.dynamic_entry_score_threshold
-        dm = self.state.dynamic_min_momentum_return
-        score_th = ds if ds is not None else self.config.entry_score_threshold
-        mom_th = dm if dm is not None else self.config.min_momentum_return
+        score_th, mom_th = self._effective_thresholds()
 
         head = (
             f"Entry diagnostic: state={self.state.state} halt_new_entries={self.state.halt_new_entries} "
@@ -1287,16 +1481,7 @@ class TradeBot:
         else:
             quotes = self.market.get_latest_quotes(self.config.symbols_universe)
 
-        dynamic_score_threshold = (
-            self.state.dynamic_entry_score_threshold
-            if self.state.dynamic_entry_score_threshold is not None
-            else self.config.entry_score_threshold
-        )
-        dynamic_min_momentum_return = (
-            self.state.dynamic_min_momentum_return
-            if self.state.dynamic_min_momentum_return is not None
-            else self.config.min_momentum_return
-        )
+        dynamic_score_threshold, dynamic_min_momentum_return = self._effective_thresholds()
 
         held: Set[str] = {s.upper() for s in (held_symbols or set())}
 
@@ -1452,6 +1637,17 @@ class TradeBot:
         if self.state.halt_new_entries:
             self._maybe_log_entry_diagnosis(
                 pre_scan_reason="halt_new_entries=True — new buys disabled (e.g. risk/data). Resume from dashboard if appropriate.",
+            )
+            return
+        if self._entry_attempts_exhausted():
+            # max_entry_attempts_per_day was dead config until 2026-09-15: it was
+            # defined, and the counter was incremented, but nothing compared them.
+            self._maybe_log_entry_diagnosis(
+                pre_scan_reason=(
+                    f"entry attempts exhausted ({self.state.entry_attempts_today}/"
+                    f"{self.config.max_entry_attempts_per_day} today) — "
+                    "set MAX_ENTRY_ATTEMPTS_PER_DAY=0 to disable this cap."
+                ),
             )
             return
 
@@ -2239,6 +2435,12 @@ class TradeBot:
         # cleared. Running this in __init__ meant it saw a phantom IN_POSITION
         # and bailed, leaving the bot alive but permanently refusing entries.
         self._maybe_clear_stale_halt_on_startup()
+
+        # Stale threshold overrides from a now-disabled trainer must not stay in
+        # force, and the effective configuration goes in the log once per start
+        # so a session's behaviour can be reconstructed from bot.log alone.
+        self._clear_disabled_training_overrides()
+        self._log_effective_config()
 
         while True:
             try:
