@@ -1028,3 +1028,125 @@ The order of operations is therefore fixed: establish an edge that survives
 `research.controls` at low frequency, *then* raise frequency as far as the edge
 supports. Doing it the other way round is the fastest way to lose the account
 that has been measured here — 98.1% in eight months.
+
+---
+
+# Signal research: three mechanisms tested, 2026-09-17
+
+Not strategy tuning. Each hypothesis was specified with a *mechanism* before
+looking, measured as an information coefficient (Spearman correlation of signal
+against forward return) on bars, and validated on a holdout of **2026-07-01 to
+2026-09-01** that was not inspected while forming the hypotheses.
+
+Measuring IC on bars rather than backtesting is deliberate: if a feature has no
+predictive content, no strategy built on it can work, and a backtest only adds
+opportunities to fit noise. Raw numbers in `signal_ic.csv`.
+
+## The live signal is not a coin flip - it is anti-predictive in-sample
+
+`momentum_return x log1p(volume_ratio)` against the forward 10-minute return,
+January-June:
+
+| symbol | IC | p |
+|---|---|---|
+| TQQQ | **-0.0242** | 2.4e-07 |
+| SOXL | **-0.0294** | 3.4e-10 |
+| SPY | **-0.0199** | 2.2e-05 |
+
+Negative at every lookback tested (1, 2, 5, 10, 20 min) against every horizon
+(5, 10, 30 min), on all three symbols. In the first half of the sample the bot
+was systematically buying what was about to fall.
+
+**But the sign does not hold.** Same measurement, `momentum_10min` against the
+forward 10 minutes:
+
+| symbol | TRAIN Jan-Jun | HOLDOUT Jul-Sep |
+|---|---|---|
+| TQQQ | -0.0257 (p 3.9e-08) | **+0.0403** (p 3.6e-07) |
+| SOXL | -0.0320 (p 7.7e-12) | **+0.0302** (p 1.4e-04) |
+| SPY | -0.0213 (p 5.1e-06) | **+0.0505** (p 1.8e-10) |
+
+Both halves are individually significant at p < 1e-4 and they point in
+**opposite directions.** Momentum reverted in the first half and persisted in
+the second. That is a regime, not an edge: nothing here tells you which regime
+you are in before the fact, so the significance is unusable. It also explains
+why the P&L-level comparison read as "coin flip" - two opposed regimes
+averaging out.
+
+## Hypothesis 2: leveraged-ETF rebalance flow - rejected, sign backwards
+
+A 3x fund must rebalance daily to hold constant leverage, so a day that is up by
+15:30 should force buying into the close. Predicted: day move and close move
+correlate **positively**, scaling with the size of the move.
+
+Measured correlation of open-to-15:30 against 15:30-to-close:
+
+| symbol | TRAIN | HOLDOUT |
+|---|---|---|
+| TQQQ | -0.105 (p 0.25) | -0.280 (p 0.07) |
+| SOXL | -0.273 (p 0.002) | -0.116 (p 0.46) |
+| SPY | -0.102 (p 0.26) | -0.250 (p 0.11) |
+
+Consistently **negative** - the opposite of the predicted sign - so the
+mechanism as stated is rejected. Late-day *reversion* is what is there instead,
+and 123 train days against 43 holdout days is too small to say much about it.
+
+## Hypothesis 3: fade the day's move into the close - rejected on holdout
+
+This is a pattern found *after* the fact, not a pre-specified mechanism, and is
+reported with that caveat. Take the position opposite the day's move at 15:30,
+exit at the close. Net of costs, per trade:
+
+| symbol | filter | TRAIN net | t | HOLDOUT net | t |
+|---|---|---|---|---|---|
+| TQQQ | large moves | +0.013% | 1.43 | **-0.217%** | -0.35 |
+| SOXL | large moves | **+0.334%** | 2.00 | **-0.422%** | -0.62 |
+| SPY | large moves | -0.004% | 1.24 | -0.043% | -0.21 |
+
+**This is the one worth dwelling on.** SOXL in-sample looks like a real
+strategy: 61% hit rate, +0.334% per trade net of costs, t = 2.00 over 59 trades.
+Deployed on that evidence it would have lost money immediately - the holdout is
+-0.422% per trade.
+
+Note the trap in the holdout column: SOXL's holdout hit rate is **66.7%**,
+*higher* than in-sample, while its net return is deeply negative. It won more
+often and lost far more when it was wrong. Hit rate on its own is not evidence,
+which is the same lesson as the win-rate dial earlier in this document.
+
+## What this gives us: a quantitative bar
+
+Costs are fixed per round trip; volatility grows with the square root of time.
+So the IC a signal needs in order to pay for itself falls as the holding period
+lengthens. Computed from this sample, assuming extreme-quantile selection
+recovers roughly 1.75 x IC x sigma:
+
+| holding period | trades/yr | IC needed (TQQQ) | IC needed (SPY) | verdict |
+|---|---|---|---|---|
+| 10 minutes | ~9,800 | **0.107** | **0.121** | out of reach |
+| 1 hour | ~1,640 | 0.044 | 0.049 | plausible |
+| **1 session** | **~252** | **0.017** | **0.019** | **reachable** |
+| 1 week | ~50 | 0.008 | 0.009 | reachable |
+| 1 month | ~12 | 0.004 | 0.004 | reachable |
+
+Observed short-horizon ICs in liquid ETFs - including every one measured above -
+run about **0.02 to 0.05.** Set against that table:
+
+- At a **10-minute** horizon you need an IC of ~0.11. Nothing measured here is
+  within a factor of three of it. This is why high frequency cannot work on this
+  account: not weak signals, but arithmetic.
+- At a **one-session** horizon you need ~0.017, which is *below* the ICs already
+  measured. A signal of the size that actually exists in this data could pay for
+  itself - if its sign were stable, which none tested was.
+
+That is the whole result in one line: **the horizon is the lever, not the
+signal.** The same predictive content that cannot survive 9,800 round trips a
+year is comfortably enough at 252, because the cost term stops dominating.
+
+## Status
+
+Three mechanisms tested, three rejected: two on sign instability across the
+holdout, one on magnitude. No signal in this repository has demonstrated stable,
+cost-beating predictive content.
+
+The holdout discipline is what produced that answer. Without it the SOXL fade
+(t = 2.00, 61% hit, +0.33% per trade) reads as deployable.
