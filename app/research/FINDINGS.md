@@ -944,3 +944,87 @@ room in it.
 Reproduce: `enable_short_entries=True` / `short_only=True` on a config,
 `spread_bps=10`, `start_equity=2000`. Mechanics are pinned by
 `app/tests/test_short_side.py` (17 tests).
+
+---
+
+# Trade frequency, measured directly, 2026-09-17
+
+The question: can this system run many trades a day and target profit? Tested
+per-instrument at realistic spreads, $2,000, 167 sessions.
+
+## First: instrument choice cannot buy cost efficiency
+
+The hypothesis was that SPY's much tighter spread (a penny on ~$700, ~1 bp)
+would make high frequency viable where the leveraged ETFs (>10 bp in the live
+log) cannot. It does not, and the reason is worth keeping:
+
+| symbol | 10-min σ | round-trip cost | **cost / σ** |
+|---|---|---|---|
+| SPY | 0.110% | 0.0300% | **27.4%** |
+| TQQQ | 0.446% | 0.1200% | **26.9%** |
+
+SPY's spread is roughly 4x tighter — and its volatility is roughly 4x lower, so
+the ratio that actually matters is **the same to within half a percentage
+point.** Cheap instruments move less by almost exactly the amount they are
+cheaper. The market prices this efficiently, and there is no instrument on this
+list where trading costs less relative to the move you are trying to capture.
+
+That closes off "use a tighter-spread universe" as a route to high frequency.
+
+## Second: loss scales with frequency, almost linearly
+
+SPY at 1 bp, $2,000:
+
+| stop / target | trades/day | win % | P&L | return | PF |
+|---|---|---|---|---|---|
+| 0.0010 / 0.0010 | **20.6** | 39.7 | -1,145.96 | **-57.3%** | 0.509 |
+| 0.0015 / 0.0020 | 9.5 | 37.5 | -606.47 | -30.3% | 0.680 |
+| 0.0020 / 0.0030 | 6.1 | 37.9 | -449.24 | -22.5% | 0.745 |
+| 0.0030 / 0.0040 | 3.6 | 42.8 | -249.70 | -12.5% | 0.811 |
+| 0.0050 / 0.0075 | 1.9 | 45.4 | -108.91 | -5.5% | 0.880 |
+| 0.0150 / 0.0350 | **1.0** | 50.0 | -44.05 | **-2.2%** | 0.926 |
+
+TQQQ at 10 bp, $2,000:
+
+| stop / target | trades/day | win % | P&L | return |
+|---|---|---|---|---|
+| 0.0010 / 0.0010 | **22.5** | 15.0 | -1,961.60 | **-98.1%** |
+| 0.0015 / 0.0020 | 20.7 | 20.8 | -1,951.64 | -97.6% |
+| 0.0030 / 0.0040 | 19.6 | 31.6 | -1,937.92 | -96.9% |
+| 0.0050 / 0.0075 | 11.9 | 32.2 | -1,855.35 | -92.8% |
+| 0.0150 / 0.0350 | **2.2** | 41.0 | -690.43 | **-34.5%** |
+
+Monotonic in both, across a 20x range of frequency. At 22 trades a day on TQQQ
+the account is **destroyed — -98.1%** over eight months.
+
+## Why it is this clean
+
+Because the loss *is* the cost. SPY at 20.6 trades/day: 3,438 round trips,
+~$1,400 of notional per trade, 0.030% round-trip cost — about $0.42 a trade, so
+roughly **$1,444 of expected cost against an observed loss of $1,146.** The
+entire result is transaction costs, which is exactly what a zero-edge signal
+predicts. Profit factor 0.509 says gross wins are half gross losses; the missing
+half is the spread.
+
+With no edge, P&L ≈ **-(trades x cost)**. Frequency is not a strategy
+parameter here, it is a multiplier on the one term that is reliably negative.
+Win rate even *improves* as frequency falls (39.7% -> 50.0% on SPY), because
+wider targets sit further outside the noise — but that is geometry, not edge.
+
+## What this means for "many trades, targeting profit"
+
+Those two goals are currently opposed, and the opposition is quantified: every
+additional trade per day costs roughly 2.5% of the account per eight months on
+SPY, and roughly 4% on TQQQ.
+
+High frequency is not inherently wrong — it is how most real intraday
+strategies make money. It requires **per-trade edge greater than per-trade
+cost**, and it is the most demanding thing to ask of a signal, because it gives
+costs the most opportunities to accumulate. Nothing in this repository has
+positive per-trade edge, so frequency currently has nothing to multiply except
+the spread.
+
+The order of operations is therefore fixed: establish an edge that survives
+`research.controls` at low frequency, *then* raise frequency as far as the edge
+supports. Doing it the other way round is the fastest way to lose the account
+that has been measured here — 98.1% in eight months.
